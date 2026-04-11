@@ -91,7 +91,10 @@ function unwrap<T>(response: any, fallback: string): T {
   return response?.data?.data as T;
 }
 
-function normalizeOccupant(raw: any, roomId: string): OfficeOccupant | null {
+export function normalizeOccupant(
+  raw: any,
+  roomId: string
+): OfficeOccupant | null {
   if (!raw || typeof raw !== "object") return null;
   const userId = String(raw.userId || raw.user_id || raw.id || "");
   if (!userId) return null;

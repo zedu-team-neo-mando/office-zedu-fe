@@ -12,6 +12,7 @@ import {
   type FurnitureItem,
   type OfficeRoom,
   type PresenceStatus,
+  type TowerOccupant,
   furnitureAabb,
   validatePlacement,
 } from "../office-data";
@@ -672,6 +673,27 @@ export class OfficeEngine {
     this.towerOffices = offices;
     if (this.view === "tower") {
       this.tower?.setData(this.towerFloors, offices);
+    }
+  }
+
+  /** Refresh the standing occupants of every room, by room id. */
+  setTowerOccupants(occupantsByRoom: Record<string, TowerOccupant[]>) {
+    if (!this.towerOffices.length) return;
+    let changed = false;
+    for (const office of this.towerOffices) {
+      const next = occupantsByRoom[office.roomId];
+      if (!next) continue;
+      const before = office.occupants;
+      if (
+        before?.length === next.length &&
+        before.every((o, i) => o.userId === next[i].userId)
+      )
+        continue;
+      office.occupants = next;
+      changed = true;
+    }
+    if (changed && this.view === "tower") {
+      this.tower?.setData(this.towerFloors, this.towerOffices);
     }
   }
 

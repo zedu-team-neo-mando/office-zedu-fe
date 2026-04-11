@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, MonitorX, RefreshCw } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { GetRequest } from "~/utils/new-request";
 import { useRBAC } from "~/hooks/useRBAC";
 import { showError, showInfo, showSuccess } from "~/components/toast/sonner";
 import EntryScreen from "./EntryScreen";
@@ -16,7 +17,8 @@ import {
 } from "./Panels";
 import ZoeDialog from "./ZoeDialog";
 import { TowerView } from "./TowerView";
-import type { TowerOffice } from "./engine/tower-scene";
+import type { TowerOffice, type TowerOccupant } from "./engine/tower-scene";
+import { normalizeOccupant } from "../../(client)/[org]/_components/office/live-office-source";
 import { Onboarding, TourOverlay, type TourStep } from "./Onboarding";
 import {
   CATALOG_BY_ID,
@@ -457,6 +459,13 @@ export default function OfficeDemo({
         point.roomId === roomId
     ).length + 1;
 
+  // Who is standing anywhere in the building, grouped by room. Populated by
+  // fetchOccupancy from a single building-wide read (live) or the seeded
+  // directory (demo).
+  const [occupantsByRoom, setOccupantsByRoom] = useState<
+    Record<string, TowerOccupant[]>
+  >({});
+
   // The tower shows the people, not the rooms: an office is lit while its
   // owner is inside it, and the search only ever matches people. The demo
   // adds the directory-only storeys that fill the building out to ten floors.
@@ -508,8 +517,16 @@ export default function OfficeDemo({
         interactive: !room.locked,
       }));
 
-    return [...shared, ...people];
-  }, [source.mode, source.members, rooms, presence, selfId]);
+    return [...shared, ...people].map((office) => {
+      const occupants = occupantsByRoom[office.roomId] ?? [];
+      if (!occupants.length) return office;
+      return {
+        ...office,
+        occupants,
+      };
+    });
+  }, [source.mode, source.members, rooms, presence, selfId, occupantsByRoom]);
+
   const isShared = Boolean(currentRoom && currentRoom.kind !== "personal");
   const { hasPermission } = useRBAC();
   const canEditShared =
@@ -1049,8 +1066,76 @@ export default function OfficeDemo({
     engineRef.current?.setOccupants(occupants);
   }, []);
 
-  // Office doors are heard per storey: the owners say whether theirs is open,
-  // and every viewer on the floor draws the same thing.
+  // ------------------------------------------------------------------ occupancy
+  // Who is standing anywhere in the building: one list, refreshed from a single
+  // endpoint instead of one request per room. Live mode asks the backend; demo
+  // mode builds it from the seeded directory, which already knows every
+  // person's room.
+  const fetchOccupancy = useCallback(async () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+
+    let occupants: OfficeOccupant[] = [];
+    if (source.mode === "live") {
+      const response = await GetRequest("/office/occupancy");
+      const body = response?.data ?? response;
+      const list = Array.isArray(body) ? body : (body?.occupants ?? []);
+      occupants = list
+        .map((item: any) => normalizeOccupant(item, item.roomId ?? ""))
+        .filter((occ): occ is OfficeOccupant => Boolean(occ));
+    } else {
+      occupants = demoOccupants();
+    }
+
+    // Join the roster for name, portrait and tint: the source is the single
+    // truth about who a person is, so the tower never invents a second
+    // identity for someone.
+    const membersById = new Map(source.members.map((m) => [m.userId, m]));
+    const byRoom = new Map<string, TowerOccupant[]>();
+    for (const occ of occupants) {
+      const member = membersById.get(occ.userId) ?? undefined;
+      const row: TowerOccupant = {
+        userId: occ.userId,
+        name: member?.displayName ?? occ.displayName,
+        avatarUrl: member?.avatarUrl,
+        tint: member?.tint ?? occ.avatar?.tint,
+        status: occ.status,
+      };
+      const list = byRoom.get(occ.roomId) ?? [];
+      list.push(row);
+      byRoom.set(occ.roomId, list);
+    }
+
+    const next = Object.fromEntries(byRoom);
+    setOccupantsByRoom(next);
+    // Feed the cells without a rebuild unless someone moved rooms.
+    engine.setTowerOccupants(next);
+  }, [source.members, source.mode]);
+
+  // Demo mode: every seeded person is where their roster says they are, so the
+  // directory reads the same way as live's single building-wide read.
+  function demoOccupants(): OfficeOccupant[] {
+    return DEMO_USERS.filter((user) => !user.isZoe && user.id !== "you").map(
+      (user) => ({
+        userId: user.id,
+        displayName: user.name,
+        username: user.username,
+        avatar: {
+          tint: user.avatar.tint,
+          body: user.avatar.body,
+          outfit: user.avatar.outfit,
+          accessory: user.avatar.accessory,
+        },
+        roomId: user.roomId,
+        status: user.status,
+        position: user.position as any,
+        rotation: 0,
+        updatedAt: new Date().toISOString(),
+      })
+    );
+  }
+
+  // ------------------------------------------------------------------ doors
   useEffect(() => {
     if (phase !== "office" || !source.subscribeDoors) return;
     return source.subscribeDoors(activeFloor, (doorRoomId, open) => {
@@ -1136,6 +1221,15 @@ export default function OfficeDemo({
   useEffect(() => {
     if (source.mode === "live") refreshAvailability();
   }, [source.mode, roomId, refreshAvailability]);
+
+  // Refresh who is standing in the building once in a while so the tower's
+  // faces stay current without a page reload and without one request per room.
+  useEffect(() => {
+    if (phase !== "office" || !ready) return;
+    fetchOccupancy();
+    const timer = window.setInterval(fetchOccupancy, AVAILABILITY_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [phase, ready, fetchOccupancy]);
 
   // The room the player stands in is judged by the server's answer to their
   // own entry, never by a headcount that may be a few seconds old.
