@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, PhoneCallIcon } from "lucide-react";
+import { Armchair, Building2, PhoneCallIcon } from "lucide-react";
 import React, { useContext, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -226,6 +226,30 @@ const SideBar: React.FC = () => {
                           </span>
                           <span className="text-white  text-[12px]">
                             Office
+                          </span>
+                        </Link>
+                      )}
+
+                      {officeEnabled === true && (
+                        <Link
+                          href={`/${orgSlug}/my-office`}
+                          className={`flex flex-col group items-center justify-center p-1 ${
+                            pathname?.includes(`/${orgSlug}/my-office`)
+                              ? "font-medium scale-[1.05]"
+                              : "hover:font-medium "
+                          } `}
+                        >
+                          <span
+                            className={` rounded-[7px] p-2 block ${
+                              pathname?.includes(`/${orgSlug}/my-office`)
+                                ? "bg-blue-200"
+                                : "group-hover:bg-blue-200"
+                            }`}
+                          >
+                            <Armchair className="h-5 w-5 text-[#344054]" />
+                          </span>
+                          <span className="text-white  text-[12px]">
+                            My office
                           </span>
                         </Link>
                       )}
