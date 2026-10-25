@@ -258,7 +258,7 @@ function Login() {
       <main className="w-full min-h-screen flex flex-col  items-center ">
         <div className="flex items-center justify-between w-full py-6 max-w-7xl px-4 sm:px-6 lg:px-8">
           <Link href="/">
-            <Image src="/Zedu.png" alt="" width={86} height={31} />
+            <Image src="/Zedu.png" alt="Zedu home" width={86} height={31} />
           </Link>
           <div>
             Don't have an account?{" "}
@@ -363,7 +363,7 @@ function Login() {
               <Separator />
             </div>
           </div>
-          <form onSubmit={handleSubmit} className="w-full">
+          <form onSubmit={handleSubmit} noValidate className="w-full">
             <div className="flex flex-col gap-[16px]">
               <div className="w-full flex flex-col gap-[8px] relative">
                 <label
@@ -375,7 +375,10 @@ function Login() {
                 <div className="w-full flex flex-col gap-[2px]">
                   <input
                     id="email"
-                    type="text"
+                    type="email"
+                    autoComplete="email"
+                    aria-invalid={Boolean(errors.email)}
+                    aria-describedby={errors.email ? "email-error" : undefined}
                     value={email}
                     onChange={handleEmailChange}
                     onBlur={handleEmailBlur}
@@ -385,7 +388,11 @@ function Login() {
                     } outline-none rounded-md py-[13px] pl-[13px]`}
                   />
                   {errors.email && (
-                    <small className="text-[12px] text-[#F81404]">
+                    <small
+                      id="email-error"
+                      role="alert"
+                      className="text-[12px] text-[#F81404]"
+                    >
                       {errors.email}
                     </small>
                   )}
@@ -403,6 +410,11 @@ function Login() {
                     <input
                       id="password"
                       type={showPassword ? "text" : "password"}
+                      autoComplete="current-password"
+                      aria-invalid={Boolean(errors.password)}
+                      aria-describedby={
+                        errors.password ? "password-error" : undefined
+                      }
                       value={password}
                       onChange={handlePasswordChange}
                       placeholder="Password"
@@ -424,7 +436,11 @@ function Login() {
                     </button>
                   </div>
                   {errors.password && (
-                    <small className="text-[12px] text-[#F81404]">
+                    <small
+                      id="password-error"
+                      role="alert"
+                      className="text-[12px] text-[#F81404]"
+                    >
                       {errors.password}
                     </small>
                   )}

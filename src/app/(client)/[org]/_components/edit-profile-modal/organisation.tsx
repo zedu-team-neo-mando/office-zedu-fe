@@ -17,6 +17,7 @@ import { Country } from "country-state-city";
 import UpdateCustomSelect from "~/components/ui/update-custom-select";
 import { PutRequest } from "~/utils/new-request";
 import { getInitials } from "~/utils/utils";
+import { getCountryName } from "~/utils/country-name";
 import { showError, showSuccess } from "~/components/toast/sonner";
 
 const EditOrganisationDialog = ({ isOpen, onClose }: any) => {
@@ -38,8 +39,9 @@ const EditOrganisationDialog = ({ isOpen, onClose }: any) => {
     setAvatar(user?.logo_url);
 
     if (user?.country && countries.length > 0) {
+      const countryName = getCountryName(user.country).toLowerCase();
       const matchedCountry = countries?.find(
-        (c: any) => c.value.toLowerCase() === user.country.toLowerCase()
+        (c: any) => c.value.toLowerCase() === countryName
       );
       setCountry(matchedCountry || null);
     }

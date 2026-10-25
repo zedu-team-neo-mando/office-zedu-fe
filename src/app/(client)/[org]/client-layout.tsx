@@ -34,6 +34,11 @@ import {
 } from "~/utils/org-switch";
 import { useOrganisationUsers } from "~/hooks/useOrganisationUsers";
 import { isReservedPathSegment } from "~/lib/reserved-paths";
+import ErrorState, {
+  ErrorStateVariant,
+  errorVariantFromStatus,
+} from "~/components/ui/error-state";
+import usePageTitle from "~/hooks/use-page-title";
 
 const ClientLayout = ({
   children,
@@ -41,8 +46,10 @@ const ClientLayout = ({
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [orgError, setOrgError] = useState<ErrorStateVariant | null>(null);
   const { state, dispatch } = useContext(DataContext);
   const pathname = usePathname();
+  usePageTitle(pathname);
   const prevPathnameRef = useRef<string | null>(null);
   const segments = pathname.split("/");
   const slug = segments[1];
@@ -74,6 +81,7 @@ const ClientLayout = ({
 
   useEffect(() => {
     let cancelled = false;
+    setOrgError(null);
 
     const storedSlug =
       localStorage.getItem("orgSlug") ||
@@ -222,8 +230,10 @@ const ClientLayout = ({
 
         redirectAfterOrgSwitch(nextSlug, channelId);
         return;
-      } else if (status === 404 || status === 400) {
-        router.push("/404");
+      } else if (!status || [400, 403, 404].includes(status) || status >= 500) {
+        // Show the real cause in place: a missing workspace, no membership,
+        // or a request that actually failed.
+        setOrgError(errorVariantFromStatus(status));
       }
 
       finish();
@@ -296,6 +306,8 @@ const ClientLayout = ({
       : undefined;
 
   if (loading) return null;
+
+  if (orgError) return <ErrorState variant={orgError} />;
 
   if (isStandaloneBuzzSession) {
     return (

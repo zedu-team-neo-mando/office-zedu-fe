@@ -45,7 +45,12 @@ const SecurityPage = () => {
   const [totalPages, setTotalPages] = useState(1);
 
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    let user: { id?: string } | null = null;
+    try {
+      user = JSON.parse(localStorage.getItem("user") || "{}");
+    } catch {
+      return;
+    }
     const getData = async () => {
       const res = await GetRequest(
         `/users/${user?.id}/login-audit?page=${currentPage}&limit=${itemsPerPage}`

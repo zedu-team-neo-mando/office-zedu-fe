@@ -176,6 +176,9 @@ export default function SettingsNav() {
                       <div className="text-blue-50">{item.icon}</div>
                       <Link
                         href={item.link}
+                        aria-current={
+                          pathname === item.link ? "page" : undefined
+                        }
                         className={`text-sm leading-4 truncate w-full text-blue-50 ${pathname === item.link ? "text-white" : ""} `}
                       >
                         {item.title}

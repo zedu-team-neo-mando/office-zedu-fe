@@ -20,4 +20,4 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
-    uses: zedu-hng/zedu-ci/.github/workflows/review-feedback.yml@00c553975e5e90036ff5b356328bd351893d3255
+    uses: zedu-hng/zedu-ci/.github/workflows/review-feedback.yml@8e31deaa857e62ed4bac364dfe8457eaaafd93f0

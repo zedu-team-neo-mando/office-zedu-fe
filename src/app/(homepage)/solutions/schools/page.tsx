@@ -264,7 +264,7 @@ const SchoolsSolutionsPage = () => {
       <section className="relative isolate overflow-hidden space-y-10 px-4 py-10 sm:px-6 sm:py-14 lg:px-10 lg:py-16">
         <div className="flex flex-col items-center text-center gap-4">
           <h1 className="text-3xl font-semibold leading-tight text-[#1f2530] sm:text-4xl lg:text-[44px] lg:leading-[1.12]">
-            How Zedu transforms Schools
+            How Zedu Transforms Schools
           </h1>
         </div>
 

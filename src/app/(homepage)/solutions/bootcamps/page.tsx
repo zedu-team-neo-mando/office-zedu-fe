@@ -96,7 +96,7 @@ const comparisonData = {
     "Important updates and resources are often lost in crowded channels or long messages and chats",
     "Students often don't know where to ask questions about lectures, and finding resources becomes difficult",
     "Mentors struggle to keep track of student progress and manage group programs across different platforms",
-    "Feedback on assignments and discussions happen in scattered places, making it hard to follow progress.",
+    "Feedback on assignments and discussions happens in scattered places, making it hard to follow progress.",
   ],
   withTitle: "With Zedu",
   withItems: [

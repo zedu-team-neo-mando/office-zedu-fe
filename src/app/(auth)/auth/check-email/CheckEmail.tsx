@@ -15,7 +15,12 @@ const CheckEmail = () => {
       <main className="w-full min-h-screen flex flex-col md:flex-row">
         <section className="w-full md:w-[45%] bg-[#F9FAFB] px-[20px] md:px-[40px] py-[20px] hidden lg:block">
           <Link href="/">
-            <Image src="/login_logo.svg" alt="" width={86} height={31} />
+            <Image
+              src="/login_logo.svg"
+              alt="Zedu home"
+              width={86}
+              height={31}
+            />
           </Link>
           <div>
             <div className="w-full flex flex-col gap-[12px] mb-[40px] md:mb-[71px]">

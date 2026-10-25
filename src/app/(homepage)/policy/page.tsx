@@ -366,9 +366,9 @@ function Policy() {
               </Link>
             </span>
             including any other media form, media channel, mobile website, or
-            mobile application related or connected thereto Zedu. Please read
-            this privacy policy carefully. If you do not agree with the terms of
-            this privacy policy, please do not access the site.
+            mobile application related or connected to it. Please read this
+            privacy policy carefully. If you do not agree with the terms of this
+            privacy policy, please do not access the site.
           </p>
           <br />
           <br />
@@ -404,10 +404,11 @@ function Policy() {
               How We Use Your Information
             </li>
 
-            <p>We may use the information we collect in the following way:</p>
+            <p>We may use the information we collect in the following ways:</p>
             <ul className="list-disc">
               <li>To personalize user experience</li>
-              <li>To improve our site To send periodic emails</li>
+              <li>To improve our site</li>
+              <li>To send periodic emails</li>
               <li>To send you service updates or promotional messages</li>
               <li>To respond to inquiries or support requests</li>
             </ul>

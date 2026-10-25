@@ -113,7 +113,7 @@ const ChangePassword = ({
             <div className="mb-4">
               <label
                 className="block text-sm font-medium mb-1"
-                htmlFor="password"
+                htmlFor="new-password"
               >
                 New Password
               </label>
@@ -139,7 +139,7 @@ const ChangePassword = ({
             <div className="mb-4">
               <label
                 className="block text-sm font-medium mb-1"
-                htmlFor="password"
+                htmlFor="confirm-password"
               >
                 Confirm Password
               </label>

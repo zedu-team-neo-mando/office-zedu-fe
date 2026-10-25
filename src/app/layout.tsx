@@ -48,7 +48,11 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  //
+  // Without both values the script URL would be "?id=undefined", which loads
+  // the page itself as a script, so analytics is only added when configured.
+  const gaId = process.env.NEXT_PUBLIC_GA_ID;
+  const gtmUrl = gtmScriptUrl();
+  const analyticsEnabled = Boolean(gaId && gtmUrl);
 
   return (
     <html
@@ -57,23 +61,24 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
-        <Script
-          async
-          src={`${gtmScriptUrl()}?id=${process.env.NEXT_PUBLIC_GA_ID}`}
-        />
-        <Script
-          id="google-analytics"
-          dangerouslySetInnerHTML={{
-            __html: `
+        {analyticsEnabled && (
+          <>
+            <Script async src={`${gtmUrl}?id=${gaId}`} />
+            <Script
+              id="google-analytics"
+              dangerouslySetInnerHTML={{
+                __html: `
               window.dataLayer = window.dataLayer || [];
               function gtag(){dataLayer.push(arguments);}
               gtag('js', new Date());
-              gtag('config', '${process.env.NEXT_PUBLIC_GA_ID}', {
+              gtag('config', '${gaId}', {
                 page_path: window.location.pathname,
               });
             `,
-          }}
-        />
+              }}
+            />
+          </>
+        )}
       </head>
 
       <body className="max-w-screen overflow-x-hidden" suppressHydrationWarning>
