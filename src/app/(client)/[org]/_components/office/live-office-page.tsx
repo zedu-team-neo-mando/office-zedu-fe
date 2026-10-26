@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import { DataContext } from "~/store/GlobalState";
@@ -39,6 +39,30 @@ export default function LiveOfficePage() {
     }
   }, [officeEnabled, orgSlug, router]);
 
+  const userChannels = useMemo(
+    () => (Array.isArray(state?.channels) ? state.channels : []),
+    [state?.channels]
+  );
+  const allOrgChannels = useMemo(() => {
+    const list = [
+      ...(Array.isArray(state?.allChannels) ? state.allChannels : []),
+      ...userChannels,
+    ];
+    const seen = new Set<string>();
+    const unique: any[] = [];
+    for (const ch of list) {
+      const id = String(ch?.id || ch?.channels_id || "");
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        unique.push(ch);
+      }
+    }
+    return unique;
+  }, [state?.allChannels, userChannels]);
+
+  const channelsRef = useRef({ allOrgChannels, userChannels });
+  channelsRef.current = { allOrgChannels, userChannels };
+
   useEffect(() => {
     if (!orgId || !userId || officeEnabled !== true) return;
 
@@ -47,7 +71,12 @@ export default function LiveOfficePage() {
     setError(null);
 
     source
-      .init(orgId, userId)
+      .init(orgId, userId, {
+        currentUser: state?.user,
+        orgMembers: state?.orgMembers || state?.mentionOrgMembers,
+        channels: channelsRef.current.allOrgChannels,
+        joinedChannels: channelsRef.current.userChannels,
+      })
       .then(() => {
         if (!cancelled) setReady(true);
       })
@@ -72,6 +101,33 @@ export default function LiveOfficePage() {
       cancelled = true;
     };
   }, [source, orgId, userId, reloadKey, officeEnabled]);
+
+  // Real-time channel addition: whenever channels change in the organisation,
+  // accommodate the new channel(s) on the general floor's channel strip and
+  // lock any channel the current user has not joined.
+  useEffect(() => {
+    if (!ready) return;
+    source.syncJoinedChannels(userChannels);
+    if (allOrgChannels.length > 0) {
+      source.syncChannels(allOrgChannels, userChannels);
+    }
+  }, [allOrgChannels, userChannels, ready, source]);
+
+  // Keep channels fresh in the background so teammate channel creations reflect live.
+  useEffect(() => {
+    if (!ready || !orgId) return;
+    const interval = setInterval(() => {
+      source.refreshChannels();
+    }, 15000);
+    const onFocus = () => {
+      source.refreshChannels();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [ready, orgId, source]);
 
   if (!orgId || !userId || !orgSlug) {
     return (
@@ -143,7 +199,13 @@ export default function LiveOfficePage() {
       source={source}
       self={{
         id: userId,
-        name: state?.user?.username ?? "You",
+        name:
+          state?.user?.display_name ||
+          [state?.user?.first_name, state?.user?.last_name]
+            .filter(Boolean)
+            .join(" ") ||
+          state?.user?.username ||
+          "You",
         role: state?.orgData?.name ?? "",
       }}
       onExit={() => router.push(`/${orgSlug}`)}

@@ -258,6 +258,7 @@ export default function OfficeDemo({
   const [towerOpen, setTowerOpen] = useState(false);
   const [towerFocus, setTowerFocus] = useState<number | null>(null);
   const openedInitialTowerRef = useRef(false);
+  const lastPositionPublishRef = useRef(0);
   const [activeFloor, setActiveFloor] = useState(0);
   const floorRooms = useMemo(
     () => rooms.filter((room) => (room.floorIndex ?? 0) === activeFloor),
@@ -846,6 +847,10 @@ export default function OfficeDemo({
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office") return;
 
+    // Reset presence for the new room so avatars from the previous room don't linger
+    setPresence([]);
+    engineRef.current?.setOccupants([]);
+
     return source.subscribePresence(
       roomId ?? "lobby",
       mergePresence,
@@ -1139,7 +1144,19 @@ export default function OfficeDemo({
       setEngineError(message);
     },
     onRoomChange: handleRoomChange,
-    onPosition: (x, z, yaw) => setPlayer({ x, z, yaw }),
+    onPosition: (x, z, yaw) => {
+      setPlayer({ x, z, yaw });
+      if (source.mode === "live" && source.publishPresence && roomId) {
+        const now = Date.now();
+        if (now - lastPositionPublishRef.current > 200) {
+          lastPositionPublishRef.current = now;
+          source.publishPresence(roomId, {
+            position: { x, y: 0, z },
+            rotation: yaw,
+          });
+        }
+      }
+    },
     onZoeProximity: setNearZoe,
     onFurnitureSelect: (id) => {
       setSelectedFurnitureId(id);

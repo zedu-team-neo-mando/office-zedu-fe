@@ -52,6 +52,19 @@ export interface OfficeRoom {
   chat: boolean;
 }
 
+export const CHANNEL_PALETTES = [
+  { accent: "#60a5fa", floor: "#172536" },
+  { accent: "#f472b6", floor: "#2a1b2c" },
+  { accent: "#34d399", floor: "#16261f" },
+  { accent: "#fbbf24", floor: "#2a2317" },
+  { accent: "#a78bfa", floor: "#241d39" },
+  { accent: "#22d3ee", floor: "#172838" },
+  { accent: "#fb7185", floor: "#2b1922" },
+  { accent: "#38bdf8", floor: "#152636" },
+  { accent: "#4ade80", floor: "#16281e" },
+  { accent: "#c084fc", floor: "#251b38" },
+];
+
 export interface FurnitureItem {
   id: string;
   catalogId: string;

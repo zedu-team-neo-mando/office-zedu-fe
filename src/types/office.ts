@@ -201,8 +201,11 @@ export interface OfficeSource {
   subscribePresence(
     roomId: string,
     onPresence: (occupants: OfficeOccupant[]) => void,
-    onState?: (state: OfficePresenceState) => void
+    onState?: (state: OfficePresenceState) => void,
+    onLayoutUpdate?: (roomId: string, items: OfficeFurnitureItem[]) => void
   ): () => void;
+  publishPresence?(roomId: string, update: Partial<OfficeOccupant>): void;
+  refreshMembers?(): Promise<OfficeMember[]>;
   /**
    * The conversation a room mirrors, oldest first. Reading a room from the
    * street must show what is already in it, not only what arrives next.
@@ -213,6 +216,9 @@ export interface OfficeSource {
     roomId: string,
     onMessage: (message: OfficeChatMessage) => void
   ): () => void;
+  /** Subscribe to dynamic room updates (e.g. newly created channels on the general floor). */
+  subscribeRooms?(onRooms: (rooms: OfficeRoom[]) => void): () => void;
+  syncChannels?(channels: any[]): boolean;
 }
 
 /** Chat message shape shared by both sources. */

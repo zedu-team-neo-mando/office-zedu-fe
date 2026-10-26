@@ -93,7 +93,25 @@ export function officeEmbedUrl(fileUrl: string): string | null {
 }
 
 export function uiAvatarUrl(name: string): string {
-  return `${readEnv("NEXT_PUBLIC_UI_AVATARS_URL")}?name=${encodeURIComponent(name)}`;
+  const base =
+    process.env.NEXT_PUBLIC_UI_AVATARS_URL ||
+    readEnv("NEXT_PUBLIC_UI_AVATARS_URL") ||
+    "https://ui-avatars.com/api/";
+  return `${base}?name=${encodeURIComponent(name)}`;
+}
+
+export function normalizeMediaUrl(fileUrl?: string | null): string | undefined {
+  if (!fileUrl) return undefined;
+  const trimmed = fileUrl.trim();
+  if (!trimmed) return undefined;
+
+  let url = trimmed;
+  if (typeof window !== "undefined") {
+    url = url.replace(/^https?:\/\/minio:(9000|9001)/i, "http://localhost:$1");
+  }
+
+  const resolved = resolveMediaFileUrl(url);
+  return resolved ?? url;
 }
 
 export function instagramUrl(): string {

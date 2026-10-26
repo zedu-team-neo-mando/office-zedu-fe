@@ -21,8 +21,9 @@ import type {
   OfficeZoeContext,
 } from "~/types/office";
 import type { TowerOffice } from "./engine/tower-scene";
+import { uiAvatarUrl } from "~/lib/env-urls";
 
-const KEY_LAYOUTS = "office-demo-layouts-v1";
+const KEY_LAYOUTS = "office-demo-layouts-v2";
 const KEY_AVATAR = "office-demo-avatar-v1";
 
 /**
@@ -110,13 +111,21 @@ export function demoTowerFloors(): OfficeFloor[] {
     {
       index: 0,
       kind: "general",
-      name: "General",
-      capacity: 0,
+      name: "General 1",
+      capacity: 12,
+      members: 0,
+      hasPortal: false,
+    },
+    {
+      index: 1,
+      kind: "general",
+      name: "General 2",
+      capacity: 12,
       members: 0,
       hasPortal: false,
     },
     ...Array.from({ length: DEMO_STOREYS }, (_, offset) => ({
-      index: offset + 1,
+      index: offset + 2,
       kind: "member" as const,
       name: `Floor ${offset + 1}`,
       capacity: DEMO_CAPACITY,
@@ -154,9 +163,7 @@ export function demoTowerOffices(
       ownerByRoom.set(user.roomId, user.avatar.tint);
     }
   }
-  const realRooms = rooms.filter(
-    (room) => room.kind === "personal" || room.kind === "channel"
-  );
+  const realRooms = rooms.filter((room) => room.kind !== "area");
   const offices: TowerOffice[] = [];
 
   for (const floor of demoTowerFloors()) {
@@ -176,6 +183,7 @@ export function demoTowerOffices(
         present: Boolean(here),
         status: here?.status ?? (personal ? "away" : undefined),
         tint: here?.tint ?? ownerByRoom.get(room.id) ?? room.accent,
+        avatarUrl: personal ? uiAvatarUrl(room.name) : undefined,
       });
     }
 
@@ -198,6 +206,7 @@ export function demoTowerOffices(
         present: occupied,
         status: occupied ? DEMO_STATUSES[seed % DEMO_STATUSES.length] : "away",
         tint: DEMO_TINTS[seed % DEMO_TINTS.length],
+        avatarUrl: uiAvatarUrl(person),
         interactive: false,
       });
     }
@@ -210,18 +219,22 @@ export function demoTowerOffices(
 export const demoSource: OfficeSource = {
   mode: "demo",
   floors: demoTowerFloors(),
-  members: DEMO_USERS.filter((user) => !user.isZoe).map((user) => ({
-    userId: user.id,
-    displayName: user.name,
-    username: user.username,
-    title: user.role,
-    tint: user.avatar.tint,
-    floorIndex: 1,
-    roomId: user.roomId,
-    online: user.status !== "away",
-    status: user.status,
-    canVisit: true,
-  })),
+  members: DEMO_USERS.filter((user) => !user.isZoe).map((user) => {
+    const room = ROOMS.find((r) => r.id === user.roomId);
+    return {
+      userId: user.id,
+      displayName: user.name,
+      username: user.username,
+      title: user.role,
+      avatarUrl: uiAvatarUrl(user.name),
+      tint: user.avatar.tint,
+      floorIndex: room?.floorIndex ?? 0,
+      roomId: user.roomId,
+      online: user.status !== "away",
+      status: user.status,
+      canVisit: user.status !== "away",
+    };
+  }),
   rooms: ROOMS as unknown as OfficeRoom[],
   initialLayouts: {},
   initialMessages: {},
@@ -243,7 +256,16 @@ export const demoSource: OfficeSource = {
           OfficeFurnitureItem[]
         >;
         for (const [roomId, items] of Object.entries(parsed)) {
-          if (Array.isArray(items)) layouts[roomId] = items;
+          const room = ROOMS.find((r) => r.id === roomId);
+          if (room && Array.isArray(items)) {
+            layouts[roomId] = items.filter(
+              (item) =>
+                item.x >= room.bounds.x - 0.2 &&
+                item.x <= room.bounds.x + room.bounds.w + 0.2 &&
+                item.z >= room.bounds.z - 0.2 &&
+                item.z <= room.bounds.z + room.bounds.d + 0.2
+            );
+          }
         }
       }
     } catch {
@@ -284,7 +306,7 @@ export const demoSource: OfficeSource = {
       id: `demo-reply-${Date.now()}`,
       roomId,
       userId: "demo",
-      name: "Teammate",
+      name: "Colleague",
       text: "Sounds good.",
       at: Date.now(),
     };
@@ -328,6 +350,11 @@ export const demoSource: OfficeSource = {
     _roomId: string,
     _onMessage: (message: OfficeChatMessage) => void
   ) {
+    return () => {};
+  },
+
+  subscribeRooms(callback: (rooms: OfficeRoom[]) => void) {
+    callback(this.rooms);
     return () => {};
   },
 };

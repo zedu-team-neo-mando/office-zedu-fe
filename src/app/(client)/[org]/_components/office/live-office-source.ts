@@ -18,11 +18,17 @@ import type {
   OfficeMember,
   OfficeOccupant,
   OfficePresenceState,
+  OfficePresenceStatus,
   OfficeRoom,
   OfficeSource,
   OfficeZoeContext,
 } from "~/types/office";
-import { ROOMS } from "~/app/office/_components/office-data";
+import {
+  AVATAR_TINTS,
+  CHANNEL_PALETTES,
+  ROOMS,
+} from "~/app/office/_components/office-data";
+import { normalizeMediaUrl, uiAvatarUrl } from "~/lib/env-urls";
 
 /** The API speaks two dimensions, the scene works in three. */
 function toSceneItem(item: OfficeApiItem): OfficeFurnitureItem {
@@ -223,7 +229,10 @@ const AREA_FALLBACK_ROOM: OfficeRoom = {
  * of truth. The static ROOMS slots are only used for description and fallback
  * capacity when the API doesn't provide one.
  */
-function buildRooms(apiRooms: OfficeApiRoom[]): OfficeRoom[] {
+function buildRooms(
+  apiRooms: OfficeApiRoom[],
+  joinedChannelIds?: Set<string>
+): OfficeRoom[] {
   const slots: Record<string, OfficeRoom[]> = {
     channel: ROOMS.filter((room) => room.kind === "channel"),
     personal: ROOMS.filter((room) => room.kind === "personal"),
@@ -236,56 +245,140 @@ function buildRooms(apiRooms: OfficeApiRoom[]): OfficeRoom[] {
 
   const used: Record<string, number> = {};
   const rooms: OfficeRoom[] = [];
+  let northRoomCount = 0;
+  let floor0NorthX = 2.4;
+  let floor1NorthX = 2.4;
+  let channelCount = 0;
+  let memberOfficeCount = 0;
 
   for (const room of apiRooms) {
+    const isExcluded =
+      room.kind !== "focus" &&
+      (room.kind === "area" ||
+        room.id.startsWith("area:") ||
+        /pod|visitor|game/i.test(room.name || "") ||
+        /pod|visitor|game/i.test(room.id || "") ||
+        /teammate/i.test(room.name || "") ||
+        /teammate/i.test(room.id || "") ||
+        Boolean(
+          (room as any).shortName && /teammate/i.test((room as any).shortName)
+        ));
+    if (isExcluded) continue;
+
     const kind = room.kind as keyof typeof slots;
     const available = slots[kind] ?? [];
     const index = used[kind] ?? 0;
     used[kind] = index + 1;
 
     const slot = available[index] ?? available[available.length - 1];
+    const template = slot;
+    if (!template && kind !== "channel") continue;
 
-    // The per-floor extras are not seeded scenes: the API owns their name and
-    // footprint, so they fall back to a neutral template and derive the walk-in
-    // point from the bounds the server sends.
-    const template =
-      slot ?? (room.kind === "area" ? { ...AREA_FALLBACK_ROOM } : undefined);
-    if (!template) continue;
+    let f = room.floorIndex ?? 0;
 
-    // Bounds come from the API (source of truth), in two dimensions. Convert
-    // them to the scene's x/z plane.
-    const bounds = room.bounds
-      ? {
-          x: room.bounds.x,
-          z: room.bounds.y,
-          w: room.bounds.w,
-          d: room.bounds.h,
-        }
-      : template.bounds;
+    let bounds: { x: number; z: number; w: number; d: number };
+    let door: { x: number; z: number };
+    let spawn: { x: number; z: number };
+    let accent = template?.accent ?? "#60a5fa";
+    let floorColor = template?.floor ?? "#172536";
 
-    // The server lays the rooms out, so the walk-in point follows every
-    // footprint. The demo's static spawns only make sense on the demo plan.
-    const spawn = {
-      x: bounds.x + bounds.w / 2,
-      z: bounds.z + bounds.d - Math.min(1.6, bounds.d * 0.35),
-    };
-    const door = { x: bounds.x + bounds.w / 2, z: bounds.z + bounds.d };
+    if (room.kind === "channel") {
+      const chIdx = channelCount++;
+      const chFloor = Math.floor(chIdx / 6);
+      const col = chIdx % 6;
+      f = chFloor;
+      bounds = {
+        x: 2.4 + col * 7.2,
+        z: 13.2,
+        w: 7.2,
+        d: 6.4,
+      };
+      door = { x: bounds.x + 3.6, z: 13.2 };
+      spawn = { x: bounds.x + 3.6, z: 14.6 };
+      const pal = CHANNEL_PALETTES[col % CHANNEL_PALETTES.length];
+      accent = pal.accent;
+      floorColor = pal.floor;
+    } else if (room.kind === "personal") {
+      const pIdx = memberOfficeCount++;
+      const floorOffset = Math.floor(pIdx / 12);
+      f = 2 + floorOffset;
+      const idxOnFloor = pIdx % 12;
+      const row = idxOnFloor % 2;
+      const col = Math.floor(idxOnFloor / 2);
+      const w = 5.0;
+      const d = 4.8;
+      bounds = {
+        x: 2.4 + col * w,
+        z: row === 0 ? 2.4 : 10.4,
+        w,
+        d,
+      };
+      door = { x: bounds.x + w / 2, z: row === 0 ? 7.2 : 10.4 };
+      spawn = { x: bounds.x + w / 2, z: row === 0 ? 6.0 : 11.6 };
+      if (template?.accent) accent = template.accent;
+      if (template?.floor) floorColor = template.floor;
+    } else {
+      // Shared North suites (reception, lounge, meeting, focus) - max 6 in a row per floor
+      const nIdx = northRoomCount++;
+      const nFloor = Math.floor(nIdx / 6);
+      f = nFloor;
+      const w = template?.bounds?.w ?? 7.2;
+      const d = template?.bounds?.d ?? 6.4;
+      const currentX = f === 0 ? floor0NorthX : floor1NorthX;
+      bounds = {
+        x: currentX,
+        z: 2.4,
+        w,
+        d,
+      };
+      if (f === 0) {
+        floor0NorthX += w;
+      } else {
+        floor1NorthX += w;
+      }
+      door = { x: bounds.x + w / 2, z: 8.8 };
+      spawn = { x: bounds.x + w / 2, z: 6.8 };
+      if (template?.accent) accent = template.accent;
+      if (template?.floor) floorColor = template.floor;
+    }
+
+    const rawName = room.name || "Room";
+    const displayName =
+      room.kind === "channel" && !rawName.startsWith("#")
+        ? `#${rawName}`
+        : rawName;
+
+    let isLocked = Boolean(room.isLocked);
+    let description = template?.description || `The ${displayName} space.`;
+
+    if (room.kind === "channel") {
+      const chRefId = String(room.refId || room.id.replace(/^channel:/, ""));
+      const isJoined = joinedChannelIds ? joinedChannelIds.has(chRefId) : false;
+      if (joinedChannelIds && joinedChannelIds.size > 0) {
+        isLocked = !isJoined;
+      }
+      if (isLocked) {
+        description = `You are not a member of ${displayName}. Join the channel in Zedu to enter.`;
+      }
+    }
 
     rooms.push({
-      ...template,
+      ...(template || {}),
       id: room.id,
-      name: room.name,
-      shortName: room.name,
+      name: displayName,
+      shortName: displayName,
       kind: room.kind,
       refId: room.refId,
-      capacity: room.capacity || template.capacity,
-      locked: Boolean(room.isLocked),
+      capacity: room.capacity || template?.capacity || 30,
+      locked: isLocked,
       // Only a channel or a DM-backed private office has a conversation.
       // Shared spaces keep their 2D description instead of an empty chat.
       chat: room.kind === "channel" || room.kind === "personal",
-      description: template.description,
+      description,
       ownerId: room.refId,
-      floorIndex: room.floorIndex ?? 0,
+      floorIndex: f,
+      accent,
+      floor: floorColor,
       bounds,
       spawn,
       door,
@@ -303,6 +396,127 @@ export class OfficeDisabledError extends Error {
   constructor() {
     super("The office is switched off for this organisation.");
     this.name = "OfficeDisabledError";
+  }
+}
+
+function deriveMemberTint(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  }
+  return AVATAR_TINTS[hash % AVATAR_TINTS.length] ?? "#8b5cf6";
+}
+
+function resolveMemberName(raw: any, user?: any, fallback = ""): string {
+  const fullName = [
+    user?.first_name,
+    user?.last_name,
+    raw?.first_name,
+    raw?.last_name,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  const name =
+    raw?.displayName ||
+    raw?.display_name ||
+    raw?.name ||
+    user?.display_name ||
+    user?.displayName ||
+    user?.name ||
+    fullName ||
+    user?.username ||
+    raw?.username ||
+    user?.fullname ||
+    user?.full_name ||
+    (typeof user?.email === "string" ? user.email.split("@")[0] : "") ||
+    (typeof raw?.email === "string" ? raw.email.split("@")[0] : "") ||
+    fallback;
+  if (/teammate/i.test(name)) {
+    return "";
+  }
+  return name;
+}
+
+interface CanonicalUserRecord {
+  canonicalId: string;
+  user: any;
+  displayName: string;
+  aliases: Set<string>;
+}
+
+function registerCanonicalUser(
+  u: any,
+  canonicalUsers: Map<string, CanonicalUserRecord>,
+  aliasToCanonical: Map<string, string>,
+  selfId?: string,
+  isSelf = false
+) {
+  if (!u) return;
+
+  const rawId = u.id !== undefined && u.id !== null ? String(u.id) : "";
+  const rawUserId = u.user_id ? String(u.user_id) : "";
+  const username = u.username ? String(u.username) : "";
+  const email = typeof u.email === "string" ? u.email.toLowerCase().trim() : "";
+
+  const matchesSelf =
+    isSelf ||
+    (Boolean(selfId) &&
+      (selfId === rawId || selfId === rawUserId || selfId === username));
+
+  let canonicalId =
+    (matchesSelf && selfId) ||
+    (rawUserId ? aliasToCanonical.get(rawUserId) : undefined) ||
+    (rawId ? aliasToCanonical.get(rawId) : undefined) ||
+    (email ? aliasToCanonical.get(email) : undefined) ||
+    (username ? aliasToCanonical.get(username) : undefined);
+
+  if (!canonicalId) {
+    canonicalId =
+      matchesSelf && selfId ? selfId : rawUserId || rawId || username;
+  }
+  if (!canonicalId) return;
+
+  let record = canonicalUsers.get(canonicalId);
+  if (!record) {
+    const displayName = resolveMemberName(undefined, u, "");
+    record = {
+      canonicalId,
+      user: u,
+      displayName,
+      aliases: new Set<string>(),
+    };
+    canonicalUsers.set(canonicalId, record);
+  } else {
+    record.user = { ...record.user, ...u };
+    if (!record.displayName) {
+      record.displayName = resolveMemberName(undefined, record.user, "");
+    }
+  }
+
+  if (rawId) {
+    record.aliases.add(rawId);
+    aliasToCanonical.set(rawId, canonicalId);
+  }
+  if (rawUserId) {
+    record.aliases.add(rawUserId);
+    aliasToCanonical.set(rawUserId, canonicalId);
+  }
+  if (username) {
+    record.aliases.add(username);
+    aliasToCanonical.set(username, canonicalId);
+  }
+  if (email) {
+    record.aliases.add(email);
+    aliasToCanonical.set(email, canonicalId);
+  }
+  if (matchesSelf) {
+    record.aliases.add("you");
+    aliasToCanonical.set("you", canonicalId);
+    if (selfId) {
+      record.aliases.add(selfId);
+      aliasToCanonical.set(selfId, canonicalId);
+    }
   }
 }
 
@@ -328,16 +542,318 @@ export class LiveOfficeSource implements OfficeSource {
 
   private orgId = "";
   private userId = "";
+  private currentUser?: any;
   private channelRoomMap: Record<string, string> = {};
   private dmOfficeMap: Record<string, string> = {};
   private dmRoomMap: Record<string, string> = {};
   private floorByRoom: Record<string, number> = {};
+  private activeSubscription?: any;
+  private activeRoomId?: string;
+  private roomListeners = new Set<(rooms: OfficeRoom[]) => void>();
+  private joinedChannelIds = new Set<string>();
 
-  async init(orgId: string, userId: string) {
+  subscribeRooms(callback: (rooms: OfficeRoom[]) => void): () => void {
+    this.roomListeners.add(callback);
+    callback([...this.rooms]);
+    return () => {
+      this.roomListeners.delete(callback);
+    };
+  }
+
+  private notifyRoomListeners() {
+    for (const listener of this.roomListeners) {
+      try {
+        listener([...this.rooms]);
+      } catch (err) {
+        console.error("Room listener error", err);
+      }
+    }
+  }
+
+  setJoinedChannels(channels: any[]) {
+    this.joinedChannelIds.clear();
+    if (Array.isArray(channels)) {
+      for (const ch of channels) {
+        const id = String(ch?.id || ch?.channels_id || "");
+        if (id) {
+          this.joinedChannelIds.add(id);
+        }
+      }
+    }
+  }
+
+  isChannelJoined(ch: any): boolean {
+    const chId = String(ch?.id || ch?.channels_id || "");
+    if (chId && this.joinedChannelIds.has(chId)) return true;
+    if (ch?.access === true) return true;
+    if (ch?.is_member === true || ch?.isMember === true) return true;
+    if (ch?.is_joined === true || ch?.isJoined === true) return true;
+    if (Array.isArray(ch?.members) && this.userId) {
+      if (
+        ch.members.some(
+          (m: any) => String(m?.id || m?.user_id || m) === this.userId
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  syncJoinedChannels(joinedChannels?: any[]): boolean {
+    if (Array.isArray(joinedChannels)) {
+      for (const ch of joinedChannels) {
+        const id = String(ch?.id || ch?.channels_id || "");
+        if (id) {
+          this.joinedChannelIds.add(id);
+        }
+      }
+    }
+
+    let changed = false;
+    for (const room of this.rooms) {
+      if (room.kind !== "channel") continue;
+      const chId = String(room.refId || room.id.replace(/^channel:/, ""));
+      const isJoined = this.joinedChannelIds.has(chId);
+      const isLocked = !isJoined;
+      const lockedDesc = `You are not a member of ${room.name}. Join the channel in Zedu to enter.`;
+      if (room.locked !== isLocked) {
+        room.locked = isLocked;
+        if (isLocked) {
+          room.description = lockedDesc;
+        }
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.notifyRoomListeners();
+    }
+    return changed;
+  }
+
+  private ensureFloors() {
+    const maxFloorIndex = Math.max(
+      1,
+      ...this.rooms.map((r) => r.floorIndex ?? 0)
+    );
+    const floors: OfficeFloor[] = [
+      {
+        index: 0,
+        kind: "general",
+        name: "General 1",
+        capacity: 12,
+        members: 0,
+        hasPortal: false,
+      },
+      {
+        index: 1,
+        kind: "general",
+        name: "General 2",
+        capacity: 12,
+        members: 0,
+        hasPortal: false,
+      },
+    ];
+    for (let f = 2; f <= maxFloorIndex; f++) {
+      const memberCountOnFloor =
+        this.members?.filter((m) => m.floorIndex === f).length ?? 0;
+      floors.push({
+        index: f,
+        kind: "member",
+        name: `Floor ${f - 1}`,
+        capacity: 12,
+        members: memberCountOnFloor,
+        hasPortal: true,
+      });
+    }
+    this.floors = floors;
+  }
+
+  syncChannels(channels: any[], joinedChannels?: any[]): boolean {
+    if (Array.isArray(joinedChannels)) {
+      for (const ch of joinedChannels) {
+        const id = String(ch?.id || ch?.channels_id || "");
+        if (id) {
+          this.joinedChannelIds.add(id);
+        }
+      }
+    }
+
+    if (!Array.isArray(channels) || channels.length === 0) return false;
+
+    let changed = false;
+    const existingChannelIds = new Set(
+      this.rooms
+        .filter((r) => r.kind === "channel")
+        .map((r) => String(r.refId || r.id.replace(/^channel:/, "")))
+    );
+
+    let totalChannelCount = this.rooms.filter(
+      (r) => r.kind === "channel"
+    ).length;
+
+    for (const ch of channels) {
+      const chId = String(ch.id || ch.channels_id || "");
+      if (!chId) continue;
+
+      const rawName = String(ch.name || ch.channel_name || "channel");
+      const displayName = rawName.startsWith("#") ? rawName : `#${rawName}`;
+      const roomId = `channel:${chId}`;
+      const isJoined = this.isChannelJoined(ch);
+      const isLocked = !isJoined;
+      const lockedDescription = `You are not a member of ${displayName}. Join the channel in Zedu to enter.`;
+      const description = isLocked
+        ? lockedDescription
+        : ch.description || `The ${displayName} channel.`;
+
+      if (existingChannelIds.has(chId)) {
+        const room = this.rooms.find(
+          (r) =>
+            r.kind === "channel" &&
+            String(r.refId || r.id.replace(/^channel:/, "")) === chId
+        );
+        if (room) {
+          if (
+            room.name !== displayName ||
+            room.locked !== isLocked ||
+            room.description !== description
+          ) {
+            room.name = displayName;
+            room.shortName = displayName;
+            room.locked = isLocked;
+            room.description = description;
+            changed = true;
+          }
+        }
+        continue;
+      }
+
+      existingChannelIds.add(chId);
+      this.channelRoomMap[chId] = roomId;
+
+      const chIdx = totalChannelCount++;
+      const chFloor = Math.floor(chIdx / 6);
+      const col = chIdx % 6;
+
+      const bounds = {
+        x: 2.4 + col * 7.2,
+        z: 13.2,
+        w: 7.2,
+        d: 6.4,
+      };
+      const spawn = {
+        x: bounds.x + 3.6,
+        z: 16.0,
+      };
+      const door = {
+        x: bounds.x + 3.6,
+        z: 13.2,
+      };
+
+      const pal = CHANNEL_PALETTES[col % CHANNEL_PALETTES.length];
+
+      this.rooms.push({
+        id: roomId,
+        kind: "channel",
+        name: displayName,
+        shortName: displayName,
+        refId: chId,
+        capacity: 30,
+        locked: isLocked,
+        chat: true,
+        description,
+        ownerId: chId,
+        floorIndex: chFloor,
+        accent: pal.accent,
+        floor: pal.floor,
+        bounds,
+        spawn,
+        door,
+      });
+
+      changed = true;
+    }
+
+    if (changed) {
+      this.ensureFloors();
+      this.notifyRoomListeners();
+    }
+
+    return changed;
+  }
+
+  async refreshChannels(): Promise<void> {
+    if (!this.orgId) return;
+    try {
+      const [res, userRes] = await Promise.all([
+        GetRequest(`/organisations/${this.orgId}/channels?limit=100`),
+        GetRequest(`/organisations/${this.orgId}/user-channels`).catch(
+          () => null
+        ),
+      ]);
+      const userChannels = userRes?.data?.data;
+      if (Array.isArray(userChannels)) {
+        for (const ch of userChannels) {
+          const id = String(ch?.id || ch?.channels_id || "");
+          if (id) this.joinedChannelIds.add(id);
+        }
+      }
+      const channels = res?.data?.data;
+      if (Array.isArray(channels)) {
+        this.syncChannels(channels);
+      } else if (Array.isArray(userChannels)) {
+        this.syncJoinedChannels();
+      }
+    } catch {
+      // ignore background refresh errors
+    }
+  }
+
+  async init(
+    orgId: string,
+    userId: string,
+    context?: {
+      currentUser?: any;
+      orgMembers?: any[];
+      channels?: any[];
+      joinedChannels?: any[];
+    }
+  ) {
     this.orgId = orgId;
     this.userId = userId;
+    this.currentUser = context?.currentUser;
 
-    const response = await GetRequest("/office/bootstrap");
+    if (Array.isArray(context?.joinedChannels)) {
+      for (const ch of context.joinedChannels) {
+        const id = String(ch?.id || ch?.channels_id || "");
+        if (id) this.joinedChannelIds.add(id);
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem(`office_avatar_${userId}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && typeof parsed.tint === "string") {
+            this.initialAvatar = { ...this.initialAvatar, ...parsed };
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const [response, usersRes, channelsRes, userChannelsRes] =
+      await Promise.all([
+        GetRequest("/office/bootstrap"),
+        GetRequest(`/organisations/${orgId}/users?limit=100`).catch(() => null),
+        GetRequest(`/organisations/${orgId}/channels?limit=100`).catch(
+          () => null
+        ),
+        GetRequest(`/organisations/${orgId}/user-channels`).catch(() => null),
+      ]);
     const status = response?.status ?? response?.response?.status;
 
     if (status === 403) {
@@ -359,27 +875,365 @@ export class LiveOfficeSource implements OfficeSource {
       ])
     );
 
-    this.rooms = buildRooms(data.rooms ?? []);
+    const apiUserChannels = userChannelsRes?.data?.data;
+    if (Array.isArray(apiUserChannels)) {
+      for (const ch of apiUserChannels) {
+        const id = String(ch?.id || ch?.channels_id || "");
+        if (id) this.joinedChannelIds.add(id);
+      }
+    }
+
+    this.rooms = buildRooms(data.rooms ?? [], this.joinedChannelIds);
     this.floors = data.floors ?? [];
-    // The member roster is what makes the tower a directory of people rather
-    // than a row of anonymous offices. A bootstrap from an older backend has
-    // no roster, so the rooms themselves are used as a fallback.
-    this.members =
-      data.members && data.members.length > 0
-        ? data.members
-        : this.rooms
-            .filter((room) => room.kind === "personal")
-            .map((room) => ({
-              userId: room.refId ?? room.id,
-              displayName: room.name,
-              floorIndex: room.floorIndex ?? 0,
-              roomId: room.id,
-              online: false,
-              status: "away" as const,
-              canVisit: !room.locked,
-            }));
+    this.ensureFloors();
+
+    const orgChannels = [
+      ...(Array.isArray(context?.channels) ? context.channels : []),
+      ...(Array.isArray(channelsRes?.data?.data) ? channelsRes.data.data : []),
+    ];
+
+    if (orgChannels.length > 0) {
+      this.syncChannels(orgChannels);
+    } else {
+      this.syncJoinedChannels();
+    }
+
+    const canonicalUsers = new Map<string, CanonicalUserRecord>();
+    const aliasToCanonical = new Map<string, string>();
+
+    // 1. Current user first, so their canonicalId is guaranteed to be this.userId
+    if (context?.currentUser) {
+      registerCanonicalUser(
+        context.currentUser,
+        canonicalUsers,
+        aliasToCanonical,
+        this.userId,
+        true
+      );
+    } else if (this.userId) {
+      aliasToCanonical.set(this.userId, this.userId);
+      aliasToCanonical.set("you", this.userId);
+    }
+
+    // 2. Org members from context
+    if (Array.isArray(context?.orgMembers)) {
+      for (const u of context.orgMembers) {
+        registerCanonicalUser(u, canonicalUsers, aliasToCanonical, this.userId);
+      }
+    }
+
+    // 3. Raw users from API
+    const rawUsers = usersRes?.data?.data;
+    if (Array.isArray(rawUsers)) {
+      for (const u of rawUsers) {
+        registerCanonicalUser(u, canonicalUsers, aliasToCanonical, this.userId);
+      }
+    }
+
+    // Pass 1: Canonicalize any existing personal rooms in this.rooms
+    for (const room of this.rooms) {
+      if (room.kind !== "personal") continue;
+      const ownerRef = String(
+        room.ownerId || room.refId || room.id.replace(/^personal:/, "")
+      );
+      const isSelf = ownerRef === "you" || ownerRef === this.userId;
+      const canonicalId = isSelf
+        ? this.userId
+        : aliasToCanonical.get(ownerRef) || ownerRef;
+
+      const record = canonicalUsers.get(canonicalId);
+      const displayName =
+        record?.displayName ||
+        (isSelf
+          ? resolveMemberName(undefined, context?.currentUser, "You") || "You"
+          : resolveMemberName(
+              undefined,
+              undefined,
+              room.name && !/teammate/i.test(room.name)
+                ? room.name.replace(/'s office$/i, "")
+                : ""
+            ));
+
+      room.ownerId = canonicalId;
+      room.refId = canonicalId;
+      room.id = `personal:${canonicalId}`;
+      if (
+        displayName &&
+        (!room.name || room.name === "Your office" || room.name === "Room")
+      ) {
+        room.name = `${displayName}'s office`;
+        room.shortName = displayName;
+      }
+    }
+
+    // Deduplicate personal rooms: keep at most one office per canonical user and per normalized name
+    const seenPersonalOwners = new Set<string>();
+    const seenPersonalNames = new Set<string>();
+    this.rooms = this.rooms.filter((room) => {
+      if (room.kind !== "personal") return true;
+      const canonicalId = String(
+        room.ownerId || room.refId || room.id.replace(/^personal:/, "")
+      );
+      const normName = (room.name || "")
+        .toLowerCase()
+        .replace(/'s office$/i, "")
+        .replace(/ your office$/i, "")
+        .trim();
+
+      if (seenPersonalOwners.has(canonicalId)) return false;
+      if (normName && seenPersonalNames.has(normName)) return false;
+
+      seenPersonalOwners.add(canonicalId);
+      if (normName) seenPersonalNames.add(normName);
+      return true;
+    });
+
+    // Pass 2: Add missing personal offices for members in canonicalUsers
+    let memberOfficeCount = this.rooms.filter(
+      (r) => r.kind === "personal"
+    ).length;
+    for (const record of canonicalUsers.values()) {
+      const uid = record.canonicalId;
+      if (!uid || seenPersonalOwners.has(uid)) continue;
+      const displayName = record.displayName;
+      if (!displayName || /teammate/i.test(displayName)) continue;
+      const normName = displayName.toLowerCase().trim();
+      if (seenPersonalNames.has(normName)) continue;
+
+      seenPersonalOwners.add(uid);
+      seenPersonalNames.add(normName);
+
+      const isOnline = Boolean(
+        record.user?.online ||
+        record.user?.status === "online" ||
+        uid === this.userId
+      );
+      const roomId = `personal:${uid}`;
+      const officeIndex = memberOfficeCount++;
+      const floorOffset = Math.floor(officeIndex / 12);
+      const memberFloor = 2 + floorOffset;
+      const idxOnFloor = officeIndex % 12;
+      const row = idxOnFloor % 2;
+      const col = Math.floor(idxOnFloor / 2);
+      const w = 5.0;
+      const d = 4.8;
+      const bounds = {
+        x: 2.4 + col * w,
+        z: row === 0 ? 2.4 : 10.4,
+        w,
+        d,
+      };
+      const door = {
+        x: bounds.x + w / 2,
+        z: row === 0 ? 7.2 : 10.4,
+      };
+      const spawn = {
+        x: bounds.x + w / 2,
+        z: row === 0 ? 6.0 : 11.6,
+      };
+
+      this.rooms.push({
+        id: roomId,
+        kind: "personal",
+        name: `${displayName}'s office`,
+        shortName: displayName,
+        refId: uid,
+        ownerId: uid,
+        capacity: 4,
+        locked: !isOnline,
+        floorIndex: memberFloor,
+        accent: deriveMemberTint(uid),
+        floor: "carpet",
+        bounds,
+        description: isOnline
+          ? `${displayName}'s office`
+          : `${displayName} is offline. Private offices are locked while the owner is away.`,
+        spawn,
+        door,
+        chat: true,
+      });
+    }
+
+    // Build this.members roster
+    if (data.members && data.members.length > 0) {
+      const seenMemberIds = new Set<string>();
+      const seenMemberNames = new Set<string>();
+      this.members = [];
+      for (const item of data.members) {
+        const raw = item as any;
+        const rawUid = String(raw.userId || raw.user_id || raw.id || "");
+        const canonicalId =
+          rawUid === "you" || rawUid === this.userId
+            ? this.userId
+            : aliasToCanonical.get(rawUid) || rawUid;
+        if (!canonicalId || seenMemberIds.has(canonicalId)) continue;
+
+        const record = canonicalUsers.get(canonicalId);
+        const user = record?.user;
+        const displayName = record?.displayName || resolveMemberName(raw, user);
+        if (!displayName || /teammate/i.test(displayName)) continue;
+        const normName = displayName.toLowerCase().trim();
+        if (seenMemberNames.has(normName)) continue;
+
+        seenMemberIds.add(canonicalId);
+        seenMemberNames.add(normName);
+
+        const targetRoomId = `personal:${canonicalId}`;
+        const room = this.rooms.find(
+          (r) => r.id === targetRoomId || r.ownerId === canonicalId
+        );
+        const isOnline = Boolean(
+          raw.online ?? user?.online ?? canonicalId === this.userId
+        );
+
+        const avatarUrl = normalizeMediaUrl(
+          raw.avatarUrl ||
+            raw.avatar_url ||
+            raw.default_avatar_url ||
+            user?.avatar_url ||
+            user?.default_avatar_url ||
+            user?.profile_url ||
+            uiAvatarUrl(displayName)
+        );
+
+        this.members.push({
+          userId: canonicalId,
+          displayName,
+          username: raw.username || user?.username,
+          title: raw.title || user?.role || "",
+          avatarUrl,
+          tint: raw.tint || deriveMemberTint(canonicalId),
+          role: raw.role || user?.role,
+          floorIndex:
+            room?.floorIndex ?? raw.floorIndex ?? raw.floor_index ?? 2,
+          roomId: room?.id || targetRoomId,
+          online: isOnline,
+          status: (raw.status ||
+            (isOnline ? "online" : "away")) as OfficePresenceStatus,
+          canVisit: raw.canVisit ?? raw.can_visit ?? true,
+        });
+      }
+    } else {
+      const memberList: OfficeMember[] = [];
+      const seenMemberIds = new Set<string>();
+      const seenMemberNames = new Set<string>();
+
+      for (const room of this.rooms.filter((r) => r.kind === "personal")) {
+        const canonicalId = String(
+          room.ownerId || room.refId || room.id.replace(/^personal:/, "")
+        );
+        if (!canonicalId || seenMemberIds.has(canonicalId)) continue;
+
+        const record = canonicalUsers.get(canonicalId);
+        const user = record?.user;
+        const displayName =
+          record?.displayName ||
+          resolveMemberName(
+            undefined,
+            user,
+            room.name && !/teammate/i.test(room.name)
+              ? room.name.replace(/'s office$/i, "")
+              : ""
+          );
+        if (!displayName || /teammate/i.test(displayName)) continue;
+        const normName = displayName.toLowerCase().trim();
+        if (seenMemberNames.has(normName)) continue;
+
+        seenMemberIds.add(canonicalId);
+        seenMemberNames.add(normName);
+
+        const isOnline = Boolean(user?.online || canonicalId === this.userId);
+        room.locked = !isOnline;
+        if (!isOnline) {
+          room.description = `${displayName} is offline. Private offices are locked while the owner is away.`;
+        }
+
+        const avatarUrl = normalizeMediaUrl(
+          user?.avatar_url ||
+            user?.default_avatar_url ||
+            user?.profile_url ||
+            uiAvatarUrl(displayName)
+        );
+
+        memberList.push({
+          userId: canonicalId,
+          displayName,
+          username: user?.username,
+          title: user?.role,
+          avatarUrl,
+          tint: deriveMemberTint(canonicalId),
+          role: user?.role,
+          floorIndex: room.floorIndex ?? 2,
+          roomId: room.id,
+          online: isOnline,
+          status: isOnline ? ("online" as const) : ("away" as const),
+          canVisit: isOnline && !room.locked,
+        });
+      }
+
+      this.members = memberList;
+    }
+
+    // Completely purge any area rooms or teammate rooms
+    this.rooms = this.rooms.filter((room) => {
+      if (room.kind === "area" || room.id.startsWith("area:")) return false;
+      if (
+        /pod|visitor|game/i.test(room.name) ||
+        /pod|visitor|game/i.test(room.id)
+      )
+        return false;
+      if (
+        /teammate/i.test(room.name) ||
+        /teammate/i.test(room.id) ||
+        /teammate/i.test(room.shortName)
+      )
+        return false;
+      return true;
+    });
+
+    // Re-index all rooms on member floors so they strictly have at most 6 rooms per row
+    let personalRoomCount = 0;
+    for (const room of this.rooms) {
+      if (room.kind === "personal") {
+        const pIdx = personalRoomCount++;
+        const floorOffset = Math.floor(pIdx / 12);
+        const f = 2 + floorOffset;
+        const idx = pIdx % 12;
+        const row = idx % 2;
+        const col = Math.floor(idx / 2);
+        const w = 5.0;
+        const d = 4.8;
+        room.floorIndex = f;
+        room.bounds = {
+          x: 2.4 + col * w,
+          z: row === 0 ? 2.4 : 10.4,
+          w,
+          d,
+        };
+        room.door = {
+          x: room.bounds.x + w / 2,
+          z: row === 0 ? 7.2 : 10.4,
+        };
+        room.spawn = {
+          x: room.bounds.x + w / 2,
+          z: row === 0 ? 6.0 : 11.6,
+        };
+      }
+    }
+
+    if (this.members) {
+      for (const member of this.members) {
+        const room = this.rooms.find((r) => r.id === member.roomId);
+        if (room && room.floorIndex !== undefined) {
+          member.floorIndex = room.floorIndex;
+        }
+      }
+    }
+
+    this.ensureFloors();
+
     this.floorByRoom = Object.fromEntries(
-      (data.rooms ?? []).map((room) => [room.id, room.floorIndex ?? 0])
+      this.rooms.map((room) => [room.id, room.floorIndex ?? 0])
     );
 
     for (const [roomId, layout] of Object.entries(data.layouts ?? {})) {
@@ -403,25 +1257,31 @@ export class LiveOfficeSource implements OfficeSource {
       items: items.map(toApiItem),
     };
 
-    const isPersonal = roomId.startsWith("personal:");
-    if (isPersonal) {
+    this.initialLayouts[roomId] = items;
+
+    try {
+      const isPersonal = roomId.startsWith("personal:");
+      if (isPersonal) {
+        unwrap(
+          await PutRequest(
+            `/office/rooms/${encodeRoomId(roomId)}/layout`,
+            payload
+          ),
+          "Your office could not be saved."
+        );
+        return;
+      }
+
       unwrap(
-        await PutRequest(
-          `/office/rooms/${encodeRoomId(roomId)}/layout`,
+        await PostRequest(
+          `/office/rooms/${encodeRoomId(roomId)}/layout/draft`,
           payload
         ),
-        "Your office could not be saved."
+        "The draft could not be saved."
       );
-      return;
+    } catch {
+      // Saved in local memory if room is not yet tracked on the backend
     }
-
-    unwrap(
-      await PostRequest(
-        `/office/rooms/${encodeRoomId(roomId)}/layout/draft`,
-        payload
-      ),
-      "The draft could not be saved."
-    );
   }
 
   async publishLayout(roomId: string, items: OfficeFurnitureItem[]) {
@@ -443,6 +1303,13 @@ export class LiveOfficeSource implements OfficeSource {
       ),
       "The layout could not be published."
     );
+    this.activeSubscription
+      ?.publish({
+        type: "layout_update",
+        roomId,
+        items,
+      })
+      .catch(() => {});
   }
 
   async resetLayout(roomId: string) {
@@ -457,6 +1324,17 @@ export class LiveOfficeSource implements OfficeSource {
   }
 
   async saveAvatar(avatar: OfficeAvatarConfig) {
+    this.initialAvatar = avatar;
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(
+          `office_avatar_${this.userId}`,
+          JSON.stringify(avatar)
+        );
+      } catch {
+        // ignore
+      }
+    }
     unwrap(
       await PutRequest("/users/me/avatar", avatar),
       "Your look could not be saved."
@@ -467,7 +1345,9 @@ export class LiveOfficeSource implements OfficeSource {
     roomId: string,
     text: string
   ): Promise<OfficeChatMessage[]> {
-    const channelId = this.channelIdForRoom(roomId);
+    const channelId =
+      this.channelIdForRoom(roomId) ??
+      (await this.resolveChannelIdForRoom(roomId));
     if (!channelId) return [];
 
     // The office posts through the same endpoints the 2D chat uses. A new
@@ -545,40 +1425,99 @@ export class LiveOfficeSource implements OfficeSource {
   }
 
   async enterRoom(roomId: string) {
-    unwrap(
-      await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/enter`, {}),
-      "The room could not be entered."
-    );
+    if (!roomId) return;
+    try {
+      const res = await PostRequest(
+        `/office/rooms/${encodeRoomId(roomId)}/enter`,
+        {}
+      );
+      unwrap(res, "The room could not be entered.");
+    } catch {
+      // Virtual or synthesized rooms not tracked in the backend database are safely ignored
+    }
   }
 
   async leaveRoom(roomId: string) {
-    unwrap(
-      await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/leave`, {}),
-      "The room could not be left."
-    );
+    if (!roomId) return;
+    try {
+      const res = await PostRequest(
+        `/office/rooms/${encodeRoomId(roomId)}/leave`,
+        {}
+      );
+      unwrap(res, "The room could not be left.");
+    } catch {
+      // Virtual or synthesized rooms not tracked in the backend database are safely ignored
+    }
   }
 
   async fetchOccupants(roomId: string): Promise<OfficeOccupant[]> {
-    // Centrifugo only carries what happens after a subscription, so the room
-    // is read once to fill in the people who were already standing there.
-    const response = await GetRequest(
-      `/office/rooms/${encodeRoomId(roomId)}/occupants`
-    );
+    if (!roomId) return [];
+    try {
+      const response = await GetRequest(
+        `/office/rooms/${encodeRoomId(roomId)}/occupants`
+      );
 
-    return (
-      unwrap<OfficeOccupant[] | undefined>(
-        response,
-        "The room could not be read."
-      ) ?? []
-    );
+      return (
+        unwrap<OfficeOccupant[] | undefined>(
+          response,
+          "The room could not be read."
+        ) ?? []
+      );
+    } catch {
+      return [];
+    }
   }
 
   private roster = new Map<string, OfficeOccupant>();
 
+  publishPresence(roomId: string, update: Partial<OfficeOccupant>): void {
+    if (
+      !this.activeSubscription ||
+      this.activeSubscription.state !== "subscribed" ||
+      this.activeRoomId !== roomId
+    ) {
+      return;
+    }
+
+    const displayName =
+      this.currentUser?.display_name ||
+      [this.currentUser?.first_name, this.currentUser?.last_name]
+        .filter(Boolean)
+        .join(" ") ||
+      this.currentUser?.name ||
+      this.currentUser?.username ||
+      "Colleague";
+
+    const pos = update.position as any;
+    const posX = pos?.x ?? 0;
+    const posZ = pos?.z ?? pos?.y ?? 0;
+
+    const payload = {
+      type: "update",
+      presence: {
+        userId: this.userId,
+        roomId,
+        displayName,
+        username: this.currentUser?.username ?? "",
+        avatar: this.initialAvatar,
+        status: (update.status ?? "online") as OfficePresenceStatus,
+        ...update,
+        position: { x: posX, y: posZ, z: posZ },
+        rotation: update.rotation ?? 0,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+
+    this.activeSubscription.publish(payload).catch(() => {
+      // Drop transient transport failures
+    });
+  }
+
   subscribePresence(
     roomId: string,
     onPresence: (occupants: OfficeOccupant[]) => void,
-    onState?: (state: OfficePresenceState) => void
+    onState?: (state: OfficePresenceState) => void,
+    onLayoutUpdate?: (roomId: string, items: OfficeFurnitureItem[]) => void
   ): () => void {
     const client = getSharedCentrifuge();
     // Presence is published per room, so the subscription has to be for the
@@ -592,6 +1531,9 @@ export class LiveOfficeSource implements OfficeSource {
     const subscription = prepareChannelSubscription(client, channel, {
       getToken: () => getSubscriptionToken(channel),
     });
+
+    this.activeSubscription = subscription;
+    this.activeRoomId = roomId;
 
     // Seed the roster once from the REST snapshot, so people who were already
     // in the room survive the first realtime event.
@@ -611,14 +1553,28 @@ export class LiveOfficeSource implements OfficeSource {
       });
 
     const onPublication = (ctx: any) => {
-      const presence = ctx?.data?.presence as OfficeOccupant | undefined;
       const eventType = ctx?.data?.type as string | undefined;
+
+      if (eventType === "layout_update") {
+        const payloadRoomId = ctx?.data?.roomId as string | undefined;
+        const payloadItems = ctx?.data?.items as
+          | OfficeFurnitureItem[]
+          | undefined;
+        if (payloadRoomId && Array.isArray(payloadItems)) {
+          onLayoutUpdate?.(payloadRoomId, payloadItems);
+        }
+        return;
+      }
+
+      const presence = ctx?.data?.presence as OfficeOccupant | undefined;
       if (!presence) return;
 
       if (eventType === "leave") {
         this.roster.delete(presence.userId);
       } else {
-        this.roster.set(presence.userId, presence);
+        const existing = this.roster.get(presence.userId);
+        const merged = existing ? { ...existing, ...presence } : presence;
+        this.roster.set(presence.userId, merged);
       }
 
       // Emit the complete roster so the UI never has stale entries.
@@ -637,6 +1593,10 @@ export class LiveOfficeSource implements OfficeSource {
 
     return () => {
       cancelled = true;
+      if (this.activeRoomId === roomId) {
+        this.activeSubscription = undefined;
+        this.activeRoomId = undefined;
+      }
       subscription.off("publication", onPublication);
       subscription.off("subscribed", onSubscribed);
       subscription.off("unsubscribed", onUnsubscribed);
@@ -650,7 +1610,9 @@ export class LiveOfficeSource implements OfficeSource {
     const room = this.rooms.find((candidate) => candidate.id === roomId);
     // A locked office is visible in the tower but its conversation is not.
     if (room?.locked) return [];
-    const channelId = this.channelIdForRoom(roomId);
+    const channelId =
+      this.channelIdForRoom(roomId) ??
+      (await this.resolveChannelIdForRoom(roomId));
     if (!channelId) return [];
 
     // The office reads the conversation the 2D chat already draws: channel
@@ -676,31 +1638,159 @@ export class LiveOfficeSource implements OfficeSource {
   ): () => void {
     const room = this.rooms.find((candidate) => candidate.id === roomId);
     if (room?.locked) return () => {};
-    const channelId = this.channelIdForRoom(roomId);
-    if (!channelId) return () => {};
 
-    // New messages land on the raw backend channel id, the same name the 2D
-    // chat subscribes to — there is no office-scoped chat channel to join.
-    const client = getSharedCentrifuge();
-    const subscription = prepareChannelSubscription(client, channelId, {
-      getToken: () => getSubscriptionToken(channelId),
-    });
+    let activeUnsub: (() => void) | null = null;
+    let cancelled = false;
 
-    const onPublication = (ctx: any) => {
-      if (ctx?.data?.type !== "message") return;
-      const message = toOfficeMessage(roomId, ctx.data, this.userId);
-      // sendChat already drew our own message, so its echo would double it.
-      if (!message || message.self) return;
-      onMessage(message);
+    const setup = (channelId: string) => {
+      const client = getSharedCentrifuge();
+      const subscription = prepareChannelSubscription(client, channelId, {
+        getToken: () => getSubscriptionToken(channelId),
+      });
+
+      const onPublication = (ctx: any) => {
+        if (ctx?.data?.type !== "message") return;
+        const message = toOfficeMessage(roomId, ctx.data, this.userId);
+        if (!message || message.self) return;
+        onMessage(message);
+      };
+
+      subscription.on("publication", onPublication);
+      subscription.subscribe();
+
+      return () => {
+        subscription.off("publication", onPublication);
+        releaseChannelSubscription(client, channelId, subscription);
+      };
     };
 
-    subscription.on("publication", onPublication);
-    subscription.subscribe();
+    const immediateChannelId = this.channelIdForRoom(roomId);
+    if (immediateChannelId) {
+      activeUnsub = setup(immediateChannelId);
+    } else {
+      void this.resolveChannelIdForRoom(roomId).then((resolved) => {
+        if (!cancelled && resolved) {
+          activeUnsub = setup(resolved);
+        }
+      });
+    }
 
     return () => {
-      subscription.off("publication", onPublication);
-      releaseChannelSubscription(client, channelId, subscription);
+      cancelled = true;
+      activeUnsub?.();
     };
+  }
+
+  async refreshMembers(): Promise<OfficeMember[]> {
+    if (!this.orgId) return this.members;
+    try {
+      const [response, usersRes] = await Promise.all([
+        GetRequest("/office/bootstrap").catch(() => null),
+        GetRequest(`/organisations/${this.orgId}/users?limit=100`).catch(
+          () => null
+        ),
+      ]);
+      const data = response?.data?.data as OfficeBootstrap | undefined;
+      const rawUsers = usersRes?.data?.data;
+      if (data?.members && data.members.length > 0) {
+        const canonicalUsers = new Map<string, CanonicalUserRecord>();
+        const aliasToCanonical = new Map<string, string>();
+
+        if (this.currentUser) {
+          registerCanonicalUser(
+            this.currentUser,
+            canonicalUsers,
+            aliasToCanonical,
+            this.userId,
+            true
+          );
+        } else if (this.userId) {
+          aliasToCanonical.set(this.userId, this.userId);
+          aliasToCanonical.set("you", this.userId);
+        }
+
+        if (Array.isArray(rawUsers)) {
+          for (const u of rawUsers) {
+            registerCanonicalUser(
+              u,
+              canonicalUsers,
+              aliasToCanonical,
+              this.userId
+            );
+          }
+        }
+
+        const seenMemberIds = new Set<string>();
+        const seenMemberNames = new Set<string>();
+        const updatedMembers: OfficeMember[] = [];
+
+        for (const item of data.members) {
+          const raw = item as any;
+          const rawUid = String(raw.userId || raw.user_id || raw.id || "");
+          const canonicalId =
+            rawUid === "you" || rawUid === this.userId
+              ? this.userId
+              : aliasToCanonical.get(rawUid) || rawUid;
+          if (!canonicalId || seenMemberIds.has(canonicalId)) continue;
+
+          const record = canonicalUsers.get(canonicalId);
+          const user = record?.user;
+          const displayName =
+            record?.displayName || resolveMemberName(raw, user);
+          if (!displayName || /teammate/i.test(displayName)) continue;
+          const normName = displayName.toLowerCase().trim();
+          if (seenMemberNames.has(normName)) continue;
+
+          seenMemberIds.add(canonicalId);
+          seenMemberNames.add(normName);
+
+          const targetRoomId = `personal:${canonicalId}`;
+          const room = this.rooms.find(
+            (r) => r.id === targetRoomId || r.ownerId === canonicalId
+          );
+          const isOnline = Boolean(
+            raw.online ||
+            user?.status === "online" ||
+            user?.online ||
+            canonicalId === this.userId
+          );
+
+          const avatarUrl = normalizeMediaUrl(
+            raw.avatarUrl ||
+              raw.avatar_url ||
+              raw.default_avatar_url ||
+              user?.avatar_url ||
+              user?.default_avatar_url ||
+              user?.profile_url ||
+              uiAvatarUrl(displayName)
+          );
+
+          updatedMembers.push({
+            userId: canonicalId,
+            displayName,
+            username: raw.username || user?.username,
+            title: raw.title || user?.role || "",
+            avatarUrl,
+            tint: raw.tint || deriveMemberTint(canonicalId),
+            floorIndex:
+              room?.floorIndex ?? raw.floorIndex ?? raw.floor_index ?? 2,
+            roomId: room?.id || targetRoomId,
+            online: isOnline,
+            status: (raw.status ||
+              (isOnline ? "online" : "away")) as OfficePresenceStatus,
+            canVisit: raw.canVisit !== false,
+            role: raw.role || user?.role,
+          });
+        }
+
+        if (updatedMembers.length > 0) {
+          this.members = updatedMembers;
+        }
+      }
+    } catch {
+      // drop transient errors
+    }
+    return this.members;
   }
 
   /** The conversation behind a room, if it has one. */
@@ -710,6 +1800,38 @@ export class LiveOfficeSource implements OfficeSource {
     }
     if (roomId.startsWith("personal:")) {
       return this.dmRoomMap[roomId] ?? null;
+    }
+    return null;
+  }
+
+  /** Resolves or creates a DM channel if not yet cached in dmRoomMap. */
+  private async resolveChannelIdForRoom(
+    roomId: string
+  ): Promise<string | null> {
+    if (roomId.startsWith("channel:")) {
+      return roomId.slice("channel:".length);
+    }
+    if (roomId.startsWith("personal:")) {
+      if (this.dmRoomMap[roomId]) return this.dmRoomMap[roomId];
+      const targetUserId = roomId.replace(/^personal:/, "");
+      if (!this.orgId || !targetUserId) return null;
+      try {
+        const res = await PostRequest(`/organisations/${this.orgId}/dms`, {
+          chat_type: "user",
+          participant_id: targetUserId,
+        });
+        const channelId =
+          res?.data?.data?.channel_id ||
+          res?.data?.data?.id ||
+          res?.data?.channel_id;
+        if (channelId) {
+          this.dmRoomMap[roomId] = String(channelId);
+          return String(channelId);
+        }
+      } catch {
+        // drop transient error
+      }
+      return null;
     }
     return null;
   }

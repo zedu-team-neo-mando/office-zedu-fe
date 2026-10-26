@@ -71,6 +71,9 @@ interface AvatarRig {
   torso: THREE.Mesh;
   ring: THREE.Mesh;
   phase: number;
+  targetX?: number;
+  targetZ?: number;
+  targetYaw?: number;
   bubble?: {
     sprite: THREE.Sprite;
     material: THREE.SpriteMaterial;
@@ -978,6 +981,10 @@ export class OfficeEngine {
       if (occ.userId === this.selfId || occ.userId === "you") continue; // self is rendered separately
 
       let rig = this.agentRigs.get(occ.userId);
+      const posX = occ.position?.x ?? 0;
+      const posZ = occ.position?.z ?? (occ.position as any)?.y ?? 0;
+      const yaw = occ.rotation ?? 0;
+
       if (!rig) {
         rig = this.createAvatar(
           occ.avatar,
@@ -987,12 +994,27 @@ export class OfficeEngine {
           false,
           false
         );
+        rig.group.position.set(posX, 0, posZ);
+        rig.group.rotation.y = yaw;
+        rig.targetX = posX;
+        rig.targetZ = posZ;
+        rig.targetYaw = yaw;
         this.agentRigs.set(occ.userId, rig);
         this.avatarGroup.add(rig.group);
+      } else {
+        const dx = posX - rig.group.position.x;
+        const dz = posZ - rig.group.position.z;
+        const dist = Math.hypot(dx, dz);
+        // If occupant teleported or changed room/spawn, snap immediately
+        if (dist > 8) {
+          rig.group.position.set(posX, 0, posZ);
+          rig.group.rotation.y = yaw;
+        }
+        rig.targetX = posX;
+        rig.targetZ = posZ;
+        rig.targetYaw = yaw;
       }
 
-      rig.group.position.set(occ.position.x, 0, occ.position.z);
-      rig.group.rotation.y = occ.rotation ?? 0;
       this.updateRigStatus(rig, occ.status);
       next.set(occ.userId, rig);
     }
@@ -4349,6 +4371,7 @@ export class OfficeEngine {
 
     this.updatePlayer(dt, elapsed);
     this.updateAgents(dt, elapsed);
+    this.updateOccupants(dt, elapsed);
     this.updateZoe(elapsed);
     this.updateBubbles();
     this.updateLabels();
@@ -4494,6 +4517,50 @@ export class OfficeEngine {
       this.animateRig(rig, speed, elapsed);
       const room = this.roomAtPosition(user.position.x, user.position.z);
       if (room) user.roomId = room.id;
+    }
+  }
+
+  private updateOccupants(dt: number, elapsed: number) {
+    if (!this.isLive) return;
+
+    for (const rig of this.agentRigs.values()) {
+      if (rig.targetX === undefined || rig.targetZ === undefined) {
+        this.animateRig(rig, 0, elapsed);
+        continue;
+      }
+
+      const dx = rig.targetX - rig.group.position.x;
+      const dz = rig.targetZ - rig.group.position.z;
+      const dist = Math.hypot(dx, dz);
+
+      let speed = 0;
+      if (dist > 0.02) {
+        const lerpFactor = Math.min(1, dt * 10);
+        rig.group.position.x += dx * lerpFactor;
+        rig.group.position.z += dz * lerpFactor;
+
+        speed = Math.min(3.5, dist / Math.max(dt, 0.016));
+
+        const moveYaw = Math.atan2(dx, dz);
+        const desiredYaw =
+          dist > 0.08 ? moveYaw : (rig.targetYaw ?? rig.group.rotation.y);
+        const yawDelta =
+          ((desiredYaw - rig.group.rotation.y + Math.PI * 3) % (Math.PI * 2)) -
+          Math.PI;
+        rig.group.rotation.y += yawDelta * Math.min(dt * 12, 1);
+      } else {
+        rig.group.position.x = rig.targetX;
+        rig.group.position.z = rig.targetZ;
+        if (rig.targetYaw !== undefined) {
+          const yawDelta =
+            ((rig.targetYaw - rig.group.rotation.y + Math.PI * 3) %
+              (Math.PI * 2)) -
+            Math.PI;
+          rig.group.rotation.y += yawDelta * Math.min(dt * 12, 1);
+        }
+      }
+
+      this.animateRig(rig, speed, elapsed);
     }
   }
 
