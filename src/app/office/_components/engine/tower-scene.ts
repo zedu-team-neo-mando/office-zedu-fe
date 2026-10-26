@@ -55,9 +55,10 @@ const CELL_GAP = 0.055;
 const LIFT_WIDTH = 1.35;
 const LIFT_DEPTH = 2.7;
 
-// Twelve offices fill a storey without turning them into cubicles: a wing of
-// eleven people is one generous row, and forty people wrap into four rows.
-const PERSONAL_PER_ROW = 12;
+// Twenty fixed exterior slots per page; unused slots remain empty.
+const PERSONAL_PER_ROW = 10;
+const PERSONAL_ROWS = 2;
+const PERSONAL_WALKWAY_WIDTH = 2;
 const CHANNEL_PER_ROW = 6;
 
 function floorY(floors: OfficeFloor[], index: number): number {
@@ -563,6 +564,28 @@ export class TowerScene {
     tag.position.set(-TOWER_WIDTH / 2 - 1.65, y + SLAB + FLOOR_HEIGHT / 2, 0);
     this.shell.add(tag);
 
+    if (!general) {
+      // Close the reserved entrance strip up to the side wall. The door is
+      // drawn in front, while office slots and the interior route stay clear.
+      const left = TOWER_WIDTH / 2 - INNER_PAD_X - PERSONAL_WALKWAY_WIDTH;
+      const right = TOWER_WIDTH / 2 - 0.2;
+      const infill = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          right - left,
+          FLOOR_HEIGHT - INNER_PAD_Y * 2,
+          0.12
+        ),
+        new THREE.MeshStandardMaterial({ color: 0xb9ab94, roughness: 0.92 })
+      );
+      infill.name = "entrance-wall-infill";
+      infill.position.set(
+        (left + right) / 2,
+        y + SLAB + FLOOR_HEIGHT / 2,
+        FACADE_Z - 0.08
+      );
+      this.shell.add(infill);
+    }
+
     if (floor.hasPortal) {
       const portal = new THREE.Mesh(
         new THREE.PlaneGeometry(1.2, 2.1),
@@ -739,16 +762,40 @@ export class TowerScene {
   // ------------------------------------------------------------------ cells
 
   private buildFloorCells(floor: OfficeFloor, offices: TowerOffice[]) {
-    if (!offices.length) return;
+    if (!offices.length && floor.kind !== "member") return;
 
-    const maxPerRow =
-      floor.kind === "general" ? CHANNEL_PER_ROW : PERSONAL_PER_ROW;
-    const counts = rowCounts(offices.length, maxPerRow);
-    const rows = counts.length;
     const usableW = TOWER_WIDTH - INNER_PAD_X * 2;
     const usableH = FLOOR_HEIGHT - INNER_PAD_Y * 2;
-    const rowH = usableH / rows;
     const baseY = floorY(this.floors, floor.index) + SLAB + INNER_PAD_Y;
+
+    if (floor.kind === "member") {
+      const columns = Math.max(
+        PERSONAL_PER_ROW,
+        Math.ceil(offices.length / PERSONAL_ROWS)
+      );
+      const cellW = (usableW - PERSONAL_WALKWAY_WIDTH) / columns;
+      const cellH = usableH / PERSONAL_ROWS;
+      for (let index = 0; index < columns * PERSONAL_ROWS; index += 1) {
+        const office = offices[index];
+        const row = index % PERSONAL_ROWS;
+        const col = Math.floor(index / PERSONAL_ROWS);
+        const rect = {
+          x: -usableW / 2 + cellW * (col + 0.5),
+          y: baseY + cellH * (row + 0.5),
+          w: cellW,
+          h: cellH,
+          row,
+          col,
+        };
+        if (office) this.buildOfficeCell(office, rect);
+        else this.buildVacantCell(rect);
+      }
+      return;
+    }
+
+    const counts = rowCounts(offices.length, CHANNEL_PER_ROW);
+    const rows = counts.length;
+    const rowH = usableH / rows;
 
     let index = 0;
     counts.forEach((count, row) => {
@@ -767,6 +814,28 @@ export class TowerScene {
         });
       }
     });
+  }
+
+  /** Closed exterior infill, not a room or a selectable directory entry. */
+  private buildVacantCell(rect: CellRect) {
+    const width = rect.w - CELL_GAP;
+    const height = rect.h - CELL_GAP;
+    const board = new THREE.Mesh(
+      new THREE.BoxGeometry(width, height, 0.12),
+      new THREE.MeshStandardMaterial({
+        color: 0xb9ab94,
+        roughness: 0.92,
+      })
+    );
+    board.name = "unoccupied-office-board";
+    board.position.set(rect.x, rect.y, FACADE_Z - 0.08);
+    this.shell.add(board);
+
+    const plate = plateSprite("Unoccupied", "#e2d8c6");
+    const plateWidth = Math.min(width - 0.2, 1.65);
+    plate.scale.set(plateWidth, plateWidth * 0.19, 1);
+    plate.position.set(rect.x, rect.y, FACADE_Z + 0.02);
+    this.shell.add(plate);
   }
 
   private buildOfficeCell(office: TowerOffice, rect: CellRect) {
