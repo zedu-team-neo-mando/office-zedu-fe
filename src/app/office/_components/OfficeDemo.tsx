@@ -1193,29 +1193,14 @@ export default function OfficeDemo({
       lastInvalidRef.current = now;
       showInfo("Can't walk there", "Try a clear path or a doorway.");
     },
+    // A click on the canvas takes the same path as picking someone from the
+    // search: the first click frames and previews the office, the second goes in.
     onTowerPick: ({ roomId: picked, floorIndex }) => {
-      const engine = engineRef.current;
-      if (!engine) return;
-      const room = roomById[picked];
-      if (!room) {
-        // A directory-only office: keep the tower open on its storey.
-        engine.pulseOffice(picked, floorIndex);
-        setTowerFocus(floorIndex);
-        return;
-      }
-      if (room.locked) {
-        engine.pulseOffice(picked, floorIndex);
-        setTowerFocus(floorIndex);
-        showInfo("Locked office", room.description);
-        return;
-      }
-      engine.setView("floor");
-      engine.focusRoom(picked);
-      setRoomId(picked);
-      setActiveFloor(floorIndex);
-      setTowerOpen(false);
-      setTowerHover(null);
-      setChatOpen(true);
+      const office = towerOffices.find(
+        (candidate) =>
+          candidate.roomId === picked && candidate.floorIndex === floorIndex
+      );
+      if (office) pickTowerPerson(office);
     },
     onTowerHover: (office) => setTowerHover(office),
   };
