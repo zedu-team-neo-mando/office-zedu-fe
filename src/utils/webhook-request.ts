@@ -13,14 +13,15 @@ const buildWebhookUrl = (
 
   let url: URL;
   try {
-    url = new URL(
-      base,
-      typeof window !== "undefined"
-        ? window.location.origin
-        : "http://localhost"
-    );
+    url = new URL(base);
   } catch {
-    return null;
+    // Relative bases can only be resolved in the browser.
+    if (typeof window === "undefined") return null;
+    try {
+      url = new URL(base, window.location.origin);
+    } catch {
+      return null;
+    }
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
