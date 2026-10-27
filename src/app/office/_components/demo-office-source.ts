@@ -236,7 +236,7 @@ export const demoSource: OfficeSource = {
       ])
     )
   ),
-  initialMessages: {},
+  initialMessages: demoChatSeeds(),
   initialAvatar: DEFAULT_AVATAR,
 
   async loadLayouts() {
