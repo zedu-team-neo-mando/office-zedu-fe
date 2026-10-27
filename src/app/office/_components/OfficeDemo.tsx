@@ -1679,22 +1679,43 @@ export default function OfficeDemo({
     const engine = engineRef.current;
     if (!engine) return;
 
+    // The tour has to resolve the live plan's ids: a channel room is
+    // channel:<uuid> and a person's office is personal:<user-id>. The demo
+    // keeps #design and the seeded personal office by name.
+    const reception = rooms.find((room) => room.kind === "reception");
+    const channel =
+      rooms.find(
+        (room) =>
+          room.kind === "channel" &&
+          room.chat &&
+          !room.locked &&
+          room.name === "#design"
+      ) ??
+      rooms.find(
+        (room) => room.kind === "channel" && room.chat && !room.locked
+      );
+    const ownOffice = rooms.find(
+      (room) => room.kind === "personal" && room.ownerId === selfId
+    );
+
     if (index === 0 || index === 1) {
-      navigateToRoom("reception");
+      if (reception) navigateToRoom(reception.id);
       return;
     }
 
     if (index === 2) {
-      navigateToRoom("channel:design");
+      if (!channel) return;
+      navigateToRoom(channel.id);
       schedule(() => setChatOpen(true), 760);
       return;
     }
 
     if (index === 3) {
-      navigateToRoom("personal:you");
+      if (!ownOffice) return;
+      navigateToRoom(ownOffice.id);
       schedule(() => {
         const state = stateRef.current;
-        if (state.roomId !== "personal:you") return;
+        if (state.roomId !== ownOffice.id) return;
         setChatOpen(false);
         setEditorActive(true);
         setEditorCatalogId(null);
@@ -1707,10 +1728,9 @@ export default function OfficeDemo({
     }
 
     if (index === 4) {
-      navigateToRoom("reception");
+      if (reception) navigateToRoom(reception.id);
       schedule(() => {
         setChatOpen(false);
-        engine.movePlayerTo(8.5, 5.55, Math.PI);
         engine.faceZoe();
         setZoeOpen(true);
       }, 820);
