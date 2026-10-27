@@ -48,6 +48,45 @@ pnpm install
 pnpm dev
 ```
 
+## Google sign-in
+
+The login and sign-up pages use Google Identity Services (`@react-oauth/google`). Two things must
+line up for the button to work:
+
+1. `NEXT_PUBLIC_GOOGLE_CLIENT_ID` — the Web application OAuth client ID for that environment. It is
+   inlined at build time, so changing it requires a rebuild.
+2. The origin the app is served from must be listed under **Authorized JavaScript origins** for that
+   client in the Google Cloud Console.
+
+If the origin is missing, Google blocks the request before the app sees it:
+
+```
+Access blocked: Authorization Error
+Error 400: origin_mismatch
+```
+
+No authorization code is returned, so `POST /auth/google` is never called and no session is created.
+The login page shows a "Google sign-in failed" toast for this case.
+
+### Registering an origin
+
+1. Find the client ID the build uses: check `NEXT_PUBLIC_GOOGLE_CLIENT_ID` in the deployment
+   environment, or search the built JavaScript for `<project>.apps.googleusercontent.com`.
+2. Open <https://console.cloud.google.com/apis/credentials> in the project that owns that client.
+3. Edit the OAuth 2.0 Client ID of type **Web application**.
+4. Under **Authorized JavaScript origins**, add each full origin (scheme + host, no trailing slash
+   or path):
+   - `http://localhost:3000` for local development
+   - `https://office.groups.zedu.chat` for the office staging deployment
+   - the production origin, if it differs
+5. Save. New origins can take a few minutes (occasionally hours) to propagate; retry afterwards.
+
+If the environment should use a different client, set `NEXT_PUBLIC_GOOGLE_CLIENT_ID` to that client
+and redeploy.
+
+Preview deployments have their own origins, so Google sign-in does not work there; use email and
+password instead.
+
 ## Contributing
 
 Please see [CONTRIBUTING](./CONTRIBUTING.md)
