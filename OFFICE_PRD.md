@@ -254,6 +254,10 @@ The previous open-plan desk cluster layout is removed. The building is a set of 
 ```
 
 - Grid: **1 metre per tile**. Building shell: 40 × 30 tiles. Rooms: 8 × 8 to 12 × 10. Corridors: 2 tiles wide.
+- Live floors use the backend's room coordinates, with internal 2-tile corridors between office blocks and rows. Touching offices share one normal-thickness wall without solid gap-fill.
+- On the General floor, the meeting rooms are equally enlarged to 7 × 6 tiles, sharing a wall while Meeting 2 keeps its origin. Reception leaves a 2-tile passage to Meeting 1. Focus rooms remain 4 × 4 tiles in aligned pairs with 2-tile centre/cross corridors and a 3-tile gap before the channel row. A three-channel row uses equal widths across the shared frontage with two 2-tile passages.
+- Member floors retain forty 5 × 5.4 offices in four rows, split into two five-office blocks per row with internal connecting corridors; shared-area passages stay open.
+- The visible platform and navigation share one footprint. A tiled corridor finish and edge border distinguish circulation from the surrounding site. The outer wall faces have a small clearance from the border line; this trim is not another corridor. The front corridor serves the last row of doors.
 - Doors occupy reserved tiles and cannot be blocked by furniture.
 - Shared rooms and the building shell are one scene. Channel rooms and private offices are **room-scoped interiors** loaded on entry, so the client never renders every office at once.
 - Every position carries a `roomId`; the lobby/corridor is a room (`kind = "lobby"`). Presence and chat subscriptions are per room.
