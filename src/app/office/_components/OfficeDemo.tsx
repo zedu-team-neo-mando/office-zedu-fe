@@ -30,7 +30,7 @@ import {
   type PresenceStatus,
   validatePlacement,
 } from "./office-data";
-import { demoSource, demoTowerOffices } from "./demo-office-source";
+import { demoAvatar, demoSource, demoTowerOffices } from "./demo-office-source";
 import { useOfficePresence } from "./use-office-presence";
 import type {
   OfficeOccupant,
@@ -598,6 +598,16 @@ export default function OfficeDemo({
   useEffect(() => {
     engineRef.current?.setTower(source.floors ?? [], towerOffices);
   }, [source.floors, towerOffices]);
+
+  // The demo keeps the avatar in localStorage. Restore it after mount, never
+  // during render, so a reload keeps the saved look without a hydration
+  // mismatch. The live office keeps the avatar the server sent.
+  useEffect(() => {
+    if (source.mode !== "demo") return;
+    const saved = demoAvatar();
+    setAvatar(saved);
+    setAvatarDraft(saved);
+  }, [source.mode]);
 
   useEffect(() => {
     engineRef.current?.setAvatar(avatarDraft);
