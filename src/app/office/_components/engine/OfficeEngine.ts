@@ -4287,8 +4287,9 @@ export class OfficeEngine {
     );
     if (!intersections.length) return;
     const point = intersections[0].point;
-    const targetRoom = this.roomAtPosition(point.x, point.z);
-    if (!targetRoom) {
+    // Corridors are walkable even when they do not belong to a named room.
+    // Validate the clicked point before pathfinding can snap it to a grid cell.
+    if (this.isBlocked(point.x, point.z)) {
       this.callbacks.onInvalidTarget();
       return;
     }
