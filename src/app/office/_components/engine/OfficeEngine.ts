@@ -4287,9 +4287,25 @@ export class OfficeEngine {
     );
     if (!intersections.length) return;
     const point = intersections[0].point;
-    // Corridors are walkable even when they do not belong to a named room.
-    // Validate the clicked point before pathfinding can snap it to a grid cell.
-    if (this.isBlocked(point.x, point.z)) {
+    // Corridors need no named room. Reject restricted targets before snapping,
+    // but let findPath snap furniture and wall clicks to nearby free floor.
+    const insideFloor = this.walkBounds.some(
+      (area) =>
+        point.x >= area.minX &&
+        point.x <= area.maxX &&
+        point.z >= area.minZ &&
+        point.z <= area.maxZ
+    );
+    const insideLockedRoom = this.allRooms.some(
+      (room) =>
+        room.locked &&
+        (room.floorIndex ?? 0) === this.activeFloor &&
+        point.x >= room.bounds.x &&
+        point.x <= room.bounds.x + room.bounds.w &&
+        point.z >= room.bounds.z &&
+        point.z <= room.bounds.z + room.bounds.d
+    );
+    if (!insideFloor || insideLockedRoom) {
       this.callbacks.onInvalidTarget();
       return;
     }

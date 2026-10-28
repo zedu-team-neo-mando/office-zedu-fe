@@ -104,16 +104,16 @@ test("named rooms remain reachable and room detection is retained", () => {
   assert.equal(h.engine.roomAtPosition(6, 4).id, "room");
 });
 
-for (const obstacle of ["outside", "wall", "furniture", "locked room"]) {
+for (const obstacle of ["outside", "locked room", "locked room edge"]) {
   test(`clicking ${obstacle} is rejected without replacing the route`, () => {
     const h = harness();
     const previous = [{ x: -5, z: 0 }];
     h.engine.path = previous;
     if (obstacle === "outside") h.target.set(40, 0, 0);
-    else if (obstacle === "locked room") {
+    else {
       h.engine.rooms[0].locked = true;
-      h.target.set(6, 0, 4);
-    } else h.engine.colliders = [{ minX: 5, maxX: 7, minZ: -1, maxZ: 1 }];
+      h.target.set(obstacle === "locked room edge" ? 3.1 : 6, 0, 4);
+    }
     h.click();
     assert.equal(h.invalid(), 1);
     assert.equal(h.engine.path, previous);
@@ -150,3 +150,35 @@ test("ordinary movement still uses the same collision guard", () => {
   h.engine.resolveMove(1, 0);
   assert.equal(h.engine.playerPosition.x, -5);
 });
+
+for (const obstacle of [
+  "furniture",
+  "wall",
+  "wall-adjacent floor",
+  "floor edge",
+]) {
+  test(`clicking ${obstacle} snaps to a nearby safe position`, () => {
+    const h = harness();
+    if (obstacle === "floor edge") h.target.set(9.9, 0, 0);
+    else if (obstacle === "furniture")
+      h.engine.colliders = [{ minX: 5, maxX: 7, minZ: -1, maxZ: 1 }];
+    else {
+      h.engine.colliders = [{ minX: 5.9, maxX: 6.1, minZ: -2, maxZ: 2 }];
+      if (obstacle === "wall-adjacent floor") h.target.set(5.7, 0, 0);
+    }
+    assert.equal(h.engine.isBlocked(h.target.x, h.target.z), true);
+    h.click();
+    assert.equal(h.invalid(), 0);
+    assert.ok(h.engine.path.length > 0);
+    const destination = h.engine.path.at(-1);
+    assert.notDeepEqual(destination, { x: h.target.x, z: h.target.z });
+    assert.equal(h.engine.isBlocked(destination.x, destination.z, 0.28), false);
+    assert.ok(
+      Math.hypot(destination.x - h.target.x, destination.z - h.target.z) <= 3
+    );
+    h.engine.path.forEach((point, index, route) => {
+      if (index)
+        assert.equal(h.engine.lineOfSight(route[index - 1], point), true);
+    });
+  });
+}
