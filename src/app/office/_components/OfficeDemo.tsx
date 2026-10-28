@@ -1006,6 +1006,7 @@ export default function OfficeDemo({
     setTowerPreview(null);
     setLiftTarget(null);
     setTowerFocus(null);
+    setChatOpen(false);
   }
 
   function showWholeTower() {
