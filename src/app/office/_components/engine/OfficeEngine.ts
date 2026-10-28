@@ -73,6 +73,7 @@ interface AvatarRig {
   torso: THREE.Mesh;
   ring: THREE.Mesh;
   phase: number;
+  status?: PresenceStatus;
   bubble?: {
     sprite: THREE.Sprite;
     material: THREE.SpriteMaterial;
@@ -591,6 +592,17 @@ export class OfficeEngine {
   }
 
   private roomsOnFloor(index: number): OfficeRoom[] {
+    if (!this.isLive && index === 0) {
+      // In demo mode, the physical ground floor plan includes the private wing
+      // (Ada, Tunde, and You) so their rooms and lighting are fully interactive.
+      return this.allRooms.filter(
+        (room) =>
+          (room.floorIndex ?? 0) === 0 ||
+          room.id === "personal:ada" ||
+          room.id === "personal:tunde" ||
+          room.id === "personal:you"
+      );
+    }
     return this.allRooms.filter((room) => (room.floorIndex ?? 0) === index);
   }
 
@@ -750,6 +762,7 @@ export class OfficeEngine {
   private furnitureItems: FurnitureItem[] = [];
   private labelSprites: THREE.Sprite[] = [];
   private floorLights: THREE.PointLight[] = [];
+  private roomCeilingLamps = new Map<string, THREE.MeshStandardMaterial>();
   /** Where the downlights were placed, so a short walk does not rebuild them. */
   private lightsAnchor = { x: 0, z: 0 };
   private selectedId: string | null = null;
@@ -1019,9 +1032,11 @@ export class OfficeEngine {
 
     // Keep the agents array in sync for any downstream code.
     this.agentRigs = next;
+    this.refreshFloorLights();
   }
 
   private updateRigStatus(rig: AvatarRig, status: PresenceStatus) {
+    rig.status = status;
     const color = STATUS_COLORS[status] ?? STATUS_COLORS.online;
     (rig.ring.material as THREE.MeshBasicMaterial).color.setHex(color);
   }
@@ -1185,6 +1200,7 @@ export class OfficeEngine {
     this.addDoorFrames();
     this.addRoomLabels();
     this.addStaticFurniture();
+    this.refreshFloorLights();
   }
 
   /**
@@ -1208,6 +1224,7 @@ export class OfficeEngine {
     this.staticColliders = [];
     this.furnitureColliders = [];
     this.furnitureMeshes.clear();
+    this.roomCeilingLamps.clear();
     this.labelSprites = [];
     this.marker = null;
     this.selectionHelper = null;
@@ -1289,24 +1306,8 @@ export class OfficeEngine {
     this.scene.add(fill.target);
     this.scene.add(fill);
 
-    if (this.isLive) return;
-
-    // Downlights over the parts of the demo plan people actually stand in.
-    const points: Array<[number, number, number, number, number, number]> = [
-      [8.5, 2.6, 5, PALETTE.lightWarm, 20, 22],
-      [9, 2.6, 19, PALETTE.glow, 16, 20],
-      [23.5, 2.6, 6.5, PALETTE.lightWarm, 14, 18],
-      [6.5, 2.6, 30.5, PALETTE.lightWarm, 12, 16],
-      [17.5, 2.6, 30.5, PALETTE.lightWarm, 12, 16],
-      [28.5, 2.6, 30.5, PALETTE.lightWarm, 12, 16],
-      [49, 2.6, 20, PALETTE.glow, 14, 18],
-      [50, 2.6, 31, PALETTE.glow, 14, 18],
-    ];
-    for (const [x, y, z, color, intensity, distance] of points) {
-      const light = new THREE.PointLight(color, intensity, distance, 2);
-      light.position.set(x, y, z);
-      this.scene.add(light);
-    }
+    // Downlights for both demo and live floors are placed and modulated
+    // dynamically by refreshFloorLights() based on room occupant status.
   }
 
   private addGround() {
@@ -1778,7 +1779,6 @@ export class OfficeEngine {
       light.dispose();
     }
     this.floorLights = [];
-    if (!this.isLive) return;
 
     // A renderer with thirty point lights drops to a slideshow, so the lights
     // are placed around where the person actually stands and the rest of the
@@ -1792,15 +1792,81 @@ export class OfficeEngine {
         return { room, distance: Math.hypot(cx - origin.x, cz - origin.z) };
       })
       .sort((a, b) => a.distance - b.distance)
-      .slice(0, 9);
+      .slice(0, 14);
 
     for (const { room } of nearest) {
       const b = room.bounds;
       // A 5 by 5.4 office needs a third of the throw of a 16 by 6 lounge.
       const area = b.w * b.d;
+      let scale = 1.0;
+      if (room.kind === "personal") {
+        const isSelfHere =
+          this.playerPosition.x >= b.x &&
+          this.playerPosition.x <= b.x + b.w &&
+          this.playerPosition.z >= b.z &&
+          this.playerPosition.z <= b.z + b.d;
+
+        let status: PresenceStatus | null = null;
+        if (isSelfHere) {
+          status = this.playerStatus;
+        } else {
+          for (const rig of this.agentRigs.values()) {
+            const p = rig.group.position;
+            if (
+              p.x >= b.x &&
+              p.x <= b.x + b.w &&
+              p.z >= b.z &&
+              p.z <= b.z + b.d
+            ) {
+              status = rig.status ?? "online";
+              break;
+            }
+          }
+          if (!status) {
+            for (const agent of this.agents) {
+              const p = agent.rig.group.position;
+              if (
+                p.x >= b.x &&
+                p.x <= b.x + b.w &&
+                p.z >= b.z &&
+                p.z <= b.z + b.d
+              ) {
+                status = agent.user.status ?? "online";
+                break;
+              }
+            }
+          }
+        }
+
+        if (!status || status === "away") {
+          scale = 0.08; // unoccupied or away personal office -> dark/dim
+        } else if (status === "idle") {
+          scale = 0.45; // inactive / idle occupant -> soft dim
+        } else {
+          scale = 1.0; // active occupant -> full bright
+        }
+
+        const ceilingLamp = this.roomCeilingLamps.get(room.id);
+        if (ceilingLamp) {
+          if (!status || status === "away") {
+            ceilingLamp.color.setHex(0x33302b);
+            ceilingLamp.emissive.setHex(0x000000);
+            ceilingLamp.emissiveIntensity = 0.0;
+          } else if (status === "idle") {
+            ceilingLamp.color.setHex(0x9e9484);
+            ceilingLamp.emissive.setHex(0xd4a055);
+            ceilingLamp.emissiveIntensity = 0.5;
+          } else {
+            ceilingLamp.color.setHex(PALETTE.lightWarm);
+            ceilingLamp.emissive.setHex(PALETTE.lightWarm);
+            ceilingLamp.emissiveIntensity = 1.7;
+          }
+        }
+      }
+
       const light = new THREE.PointLight(
         PALETTE.lightWarm,
-        clamp(3 + area * 0.12, 4, 9),
+        clamp(3 + area * 0.12, 4, 9) * scale,
         clamp(Math.sqrt(area) * 2.1, 6, 16),
         2
       );
@@ -1816,7 +1882,6 @@ export class OfficeEngine {
    * inside the same wing is left alone.
    */
   private updateFloorLights() {
-    if (!this.isLive) return;
     const walked = Math.hypot(
       this.playerPosition.x - this.lightsAnchor.x,
       this.playerPosition.z - this.lightsAnchor.z
@@ -2015,13 +2080,15 @@ export class OfficeEngine {
       }
 
       // The fitting every lit room is expected to have, just under the head.
+      const lampMat = lamp.clone();
+      this.roomCeilingLamps.set(room.id, lampMat);
       const strip = new THREE.Mesh(
         new THREE.BoxGeometry(
           Math.min(1.7, b.w * 0.5),
           0.05,
           Math.min(0.32, b.d * 0.16)
         ),
-        lamp
+        lampMat
       );
       strip.position.set(cx, height - 0.09, cz);
       this.buildingGroup.add(strip);
@@ -4964,6 +5031,7 @@ export class OfficeEngine {
         this.playerStatus = "online";
       }
       this.callbacks.onRoomChange(nextRoom);
+      this.refreshFloorLights();
     }
   }
 

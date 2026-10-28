@@ -73,9 +73,11 @@ function isTowerRoom(office: TowerOffice): boolean {
 }
 
 function isLit(office: TowerOffice): boolean {
-  // The building is lit all day. Presence is shown by the person and the
-  // status dot, not by leaving somebody's office dark.
-  return isTowerRoom(office);
+  // Personal offices of inactive or away users are dimmed, while active
+  // users and shared spaces stay warmly lit.
+  if (!isTowerRoom(office)) return false;
+  if (office.kind !== "personal") return true;
+  return Boolean(office.present && office.status !== "away");
 }
 
 function statusColor(status?: string): number {
@@ -320,6 +322,11 @@ interface OfficeCell {
   statusDot?: THREE.Mesh;
   plate?: THREE.Sprite;
   avatar?: THREE.Sprite;
+  ceilingLight?: THREE.Mesh;
+  ceilingMaterial?: THREE.MeshStandardMaterial;
+  floorMaterial?: THREE.MeshStandardMaterial;
+  baseWallColor: THREE.Color;
+  warmth: number;
 }
 
 interface CellRect {
@@ -496,8 +503,23 @@ export class TowerScene {
           next.present ? statusColor(next.status) : STATUS_COLORS.away
         );
       }
+      const style = this.cellStyle(
+        cell.office,
+        cell.baseWallColor,
+        cell.warmth
+      );
+      if (cell.ceilingMaterial) {
+        cell.ceilingMaterial.color.setHex(style.ceilingColor);
+        cell.ceilingMaterial.emissive.setHex(style.ceilingEmissive);
+        cell.ceilingMaterial.emissiveIntensity = style.ceilingIntensity;
+      }
+      cell.material.color.copy(style.wallColor);
+      cell.material.emissive.setHex(style.wallEmissive);
       if (this.hovered !== id) {
-        cell.material.emissiveIntensity = this.baseIntensity(cell);
+        cell.material.emissiveIntensity = style.wallIntensity;
+      }
+      if (cell.floorMaterial) {
+        cell.floorMaterial.color.setHex(style.floorColor);
       }
     }
   }
@@ -791,10 +813,11 @@ export class TowerScene {
       accent,
       shared ? 0.02 : 0.045
     );
+    const style = this.cellStyle(office, wallColor, warmth);
     const material = new THREE.MeshStandardMaterial({
-      color: wallColor,
-      emissive: PALETTE.glow,
-      emissiveIntensity: (shared ? 0.2 : present ? 0.3 : 0.24) * warmth,
+      color: style.wallColor,
+      emissive: style.wallEmissive,
+      emissiveIntensity: style.wallIntensity,
       roughness: 0.94,
     });
 
@@ -803,7 +826,7 @@ export class TowerScene {
     this.shell.add(back);
 
     const floorMat = new THREE.MeshStandardMaterial({
-      color: shared ? 0xd8d0c2 : PALETTE.wood,
+      color: style.floorColor,
       roughness: 0.82,
     });
     const floor = new THREE.Mesh(
@@ -830,15 +853,17 @@ export class TowerScene {
     }
 
     // The ceiling panel is the light source that makes the room read as an
-    // interior rather than a painted square.
+    // interior rather than a painted square. Its brightness dims when the
+    // occupant is idle, away, or offline.
+    const ceilingMat = new THREE.MeshStandardMaterial({
+      color: style.ceilingColor,
+      emissive: style.ceilingEmissive,
+      emissiveIntensity: style.ceilingIntensity,
+      roughness: 0.4,
+    });
     const ceilingLight = new THREE.Mesh(
       new THREE.BoxGeometry(Math.max(0.2, w * 0.55), 0.035, 0.14),
-      new THREE.MeshStandardMaterial({
-        color: 0xfff4d8,
-        emissive: 0xffe1a4,
-        emissiveIntensity: 1.5,
-        roughness: 0.4,
-      })
+      ceilingMat
     );
     ceilingLight.position.set(rect.x, top - 0.08, zFront - 0.32);
     this.shell.add(ceilingLight);
@@ -948,6 +973,11 @@ export class TowerScene {
       mesh: back,
       material,
       rect,
+      ceilingLight,
+      ceilingMaterial: ceilingMat,
+      floorMaterial: floorMat,
+      baseWallColor: wallColor,
+      warmth,
     };
 
     if (personal) {
@@ -1089,15 +1119,95 @@ export class TowerScene {
     if (this.hovered === roomId) return;
     this.hovered = roomId;
     for (const [id, cell] of this.cells) {
-      cell.material.emissiveIntensity =
-        id === roomId ? 1.05 : this.baseIntensity(cell);
+      if (id === roomId) {
+        cell.material.emissiveIntensity = 1.05;
+      } else {
+        const style = this.cellStyle(
+          cell.office,
+          cell.baseWallColor,
+          cell.warmth
+        );
+        cell.material.emissiveIntensity = style.wallIntensity;
+      }
     }
   }
 
+  private cellStyle(
+    office: TowerOffice,
+    baseWallColor: THREE.Color,
+    warmth: number
+  ) {
+    if (!isTowerRoom(office)) {
+      return {
+        ceilingColor: 0x33302b,
+        ceilingEmissive: 0x000000,
+        ceilingIntensity: 0.0,
+        wallColor: new THREE.Color(0x23201d),
+        wallEmissive: 0x000000,
+        wallIntensity: 0.0,
+        floorColor: 0x181512,
+      };
+    }
+
+    if (office.kind !== "personal") {
+      // Shared spaces (Lounge, Reception, Meeting rooms) stay warmly lit
+      return {
+        ceilingColor: 0xfff4d8,
+        ceilingEmissive: 0xffe1a4,
+        ceilingIntensity: 1.6,
+        wallColor: baseWallColor,
+        wallEmissive: PALETTE.glow,
+        wallIntensity: 0.22 * warmth,
+        floorColor: 0xd8d0c2,
+      };
+    }
+
+    if (!office.present || office.status === "away") {
+      // Away or unoccupied personal office: unlit / dim night state
+      return {
+        ceilingColor: 0x33302b,
+        ceilingEmissive: 0x000000,
+        ceilingIntensity: 0.0,
+        wallColor: new THREE.Color(0x23201d),
+        wallEmissive: 0x000000,
+        wallIntensity: 0.0,
+        floorColor: 0x181512,
+      };
+    }
+
+    if (office.status === "idle") {
+      // Inactive / idle occupant (> 2 min no input): soft warm dim
+      return {
+        ceilingColor: 0x9e9484,
+        ceilingEmissive: 0xd4a055,
+        ceilingIntensity: 0.45,
+        wallColor: baseWallColor.clone().multiplyScalar(0.55),
+        wallEmissive: PALETTE.glow,
+        wallIntensity: 0.12 * warmth,
+        floorColor: 0x4a3a2a,
+      };
+    }
+
+    // Active occupant (online, call, dnd): fully bright and warm
+    return {
+      ceilingColor: 0xfff4d8,
+      ceilingEmissive: 0xffe1a4,
+      ceilingIntensity: 1.6,
+      wallColor: baseWallColor,
+      wallEmissive: PALETTE.glow,
+      wallIntensity: 0.3 * warmth,
+      floorColor: PALETTE.wood,
+    };
+  }
+
   private baseIntensity(cell: OfficeCell): number {
-    if (!isLit(cell.office)) return 0.16;
-    if (cell.office.kind !== "personal") return 0.2;
-    return cell.office.present ? 0.3 : 0.24;
+    return this.cellStyle(cell.office, cell.baseWallColor, cell.warmth)
+      .wallIntensity;
+  }
+
+  private ceilingIntensity(cell: OfficeCell): number {
+    return this.cellStyle(cell.office, cell.baseWallColor, cell.warmth)
+      .ceilingIntensity;
   }
 
   /** Make one office pulse, used when a search picks a person out. */
