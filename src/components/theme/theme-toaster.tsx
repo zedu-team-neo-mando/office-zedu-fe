@@ -7,7 +7,7 @@ import { Toaster } from "sonner";
 export function ThemeToaster() {
   const { resolvedTheme } = useTheme();
   const pathname = usePathname();
-  const isOffice = pathname?.startsWith("/office");
+  const isOffice = Boolean(pathname?.includes("/office"));
 
   return (
     <Toaster
