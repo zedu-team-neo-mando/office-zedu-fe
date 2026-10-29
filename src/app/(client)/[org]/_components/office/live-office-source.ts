@@ -246,7 +246,10 @@ const AREA_FALLBACK_ROOM: OfficeRoom = {
  * of truth. The static ROOMS slots are only used for description and fallback
  * capacity when the API doesn't provide one.
  */
-function buildRooms(apiRooms: OfficeApiRoom[]): OfficeRoom[] {
+function buildRooms(
+  apiRooms: OfficeApiRoom[],
+  dmRoomMap: Record<string, string>
+): OfficeRoom[] {
   const slots: Record<string, OfficeRoom[]> = {
     channel: ROOMS.filter((room) => room.kind === "channel"),
     personal: ROOMS.filter((room) => room.kind === "personal"),
@@ -305,7 +308,9 @@ function buildRooms(apiRooms: OfficeApiRoom[]): OfficeRoom[] {
       locked: Boolean(room.isLocked),
       // Only a channel or a DM-backed private office has a conversation.
       // Shared spaces keep their 2D description instead of an empty chat.
-      chat: room.kind === "channel" || room.kind === "personal",
+      chat:
+        room.kind === "channel" ||
+        (room.kind === "personal" && Boolean(dmRoomMap[room.id])),
       description: template.description,
       ownerId: room.refId,
       floorIndex: room.floorIndex ?? 0,
@@ -382,7 +387,7 @@ export class LiveOfficeSource implements OfficeSource {
       ])
     );
 
-    this.rooms = buildRooms(data.rooms ?? []);
+    this.rooms = buildRooms(data.rooms ?? [], this.dmRoomMap);
     this.floors = data.floors ?? [];
     // The member roster is what makes the tower a directory of people rather
     // than a row of anonymous offices. A bootstrap from an older backend has
@@ -508,7 +513,11 @@ export class LiveOfficeSource implements OfficeSource {
     text: string
   ): Promise<OfficeChatMessage[]> {
     const channelId = this.channelIdForRoom(roomId);
-    if (!channelId) return [];
+    if (!channelId) {
+      throw new Error(
+        "This office has no linked conversation. Open a DM in Zedu, then reload Office."
+      );
+    }
 
     // The office posts through the same endpoints the 2D chat uses. A new
     // top-level message is a new thread; replying to an existing thread is a
@@ -532,7 +541,19 @@ export class LiveOfficeSource implements OfficeSource {
       );
     }
 
-    return [];
+    return [
+      {
+        id: threadId,
+        roomId,
+        userId: this.userId,
+        name:
+          this.members.find((member) => member.userId === this.userId)
+            ?.displayName ?? "You",
+        text,
+        at: Date.now(),
+        self: true,
+      },
+    ];
   }
 
   async askZoe(question: string, context: OfficeZoeContext) {
@@ -805,7 +826,7 @@ export class LiveOfficeSource implements OfficeSource {
     const onPublication = (ctx: any) => {
       if (ctx?.data?.type !== "message") return;
       const message = toOfficeMessage(roomId, ctx.data, this.userId);
-      // sendChat already drew our own message, so its echo would double it.
+      // The confirmed send result draws our own message; ignore its echo.
       if (!message || message.self) return;
       onMessage(message);
     };
