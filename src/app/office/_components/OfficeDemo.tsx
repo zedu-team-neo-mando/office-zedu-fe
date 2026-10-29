@@ -334,9 +334,14 @@ export default function OfficeDemo({
           (item) => item.id === selectedFurnitureId
         ) ?? null)
       : null;
-  // Presence rosters may already include the signed-in person; count them once.
+  // Match the directory's room scope; count the signed-in person once.
   const onlineCount =
-    presence.filter((point) => point.id !== selfId).length + 1;
+    presence.filter(
+      (point) =>
+        point.id !== selfId &&
+        point.roomId !== "lobby" &&
+        point.roomId === roomId
+    ).length + 1;
 
   // The tower shows the people, not the rooms: an office is lit while its
   // owner is inside it, and the search only ever matches people. The demo
