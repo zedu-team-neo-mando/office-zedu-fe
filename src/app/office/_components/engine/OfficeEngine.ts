@@ -449,6 +449,7 @@ export class OfficeEngine {
 
   private playerRig: AvatarRig | null = null;
   private playerStatus: PresenceStatus = "online";
+  private beforeFocusStatus: PresenceStatus | null = null;
   private currentRoom: OfficeRoom | null = ROOM_BY_ID.reception;
   private nearZoe = false;
   private rooms: OfficeRoom[] = ROOMS;
@@ -706,6 +707,7 @@ export class OfficeEngine {
     this.playerYaw = Math.PI;
     this.path = [];
     this.playerVelocity.set(0, 0);
+    this.updatePlayerRoomStatus(room);
     this.currentRoom = room;
     this.lastRoomCheck = 0;
     this.cameraTarget.set(room.spawn.x, 1.1, room.spawn.z);
@@ -830,6 +832,7 @@ export class OfficeEngine {
       if (entrance) {
         this.playerPosition.set(entrance.spawn.x, 0, entrance.spawn.z);
         this.cameraTarget.set(entrance.spawn.x, 1.25, entrance.spawn.z);
+        this.updatePlayerRoomStatus(entrance);
         this.currentRoom = entrance;
       }
     }
@@ -986,7 +989,11 @@ export class OfficeEngine {
 
     // Create or update rigs for occupants that are present.
     for (const occ of occupants) {
-      if (occ.userId === this.selfId || occ.userId === "you") continue; // self is rendered separately
+      if (occ.userId === this.selfId || occ.userId === "you") {
+        this.playerStatus = occ.status;
+        if (this.playerRig) this.updateRigStatus(this.playerRig, occ.status);
+        continue;
+      }
 
       let rig = this.agentRigs.get(occ.userId);
       if (!rig) {
@@ -1024,6 +1031,24 @@ export class OfficeEngine {
   private updateRigStatus(rig: AvatarRig, status: PresenceStatus) {
     const color = STATUS_COLORS[status] ?? STATUS_COLORS.online;
     (rig.ring.material as THREE.MeshBasicMaterial).color.setHex(color);
+    const label = rig.group.children.find(
+      (child) => child.userData.nameplate
+    ) as THREE.Sprite | undefined;
+    const data = label?.userData.nameplate;
+    if (label && data && data.status !== status) {
+      const next = this.makeNameplate(
+        data.name,
+        status,
+        data.tint,
+        data.isPlayer,
+        data.isZoe
+      );
+      next.position.copy(label.position);
+      rig.group.remove(label);
+      label.material.map?.dispose();
+      label.material.dispose();
+      rig.group.add(next);
+    }
   }
 
   setEditState(state: EditState) {
@@ -1081,6 +1106,7 @@ export class OfficeEngine {
     this.playerYaw = Math.PI;
     this.path = [];
     this.playerVelocity.set(0, 0);
+    this.updatePlayerRoomStatus(room);
     this.currentRoom = room;
     this.lastRoomCheck = 0;
     if (immediate) {
@@ -3527,6 +3553,7 @@ export class OfficeEngine {
     const sprite = new THREE.Sprite(material);
     sprite.scale.set(2.1, 0.59, 1);
     sprite.renderOrder = 10;
+    sprite.userData.nameplate = { name, status, tint, isPlayer, isZoe };
     return sprite;
   }
 
@@ -4965,6 +4992,19 @@ export class OfficeEngine {
     }
   }
 
+  private updatePlayerRoomStatus(room: OfficeRoom | null) {
+    if (room?.kind === "focus") {
+      this.beforeFocusStatus ??= this.playerStatus;
+      if (!this.isLive) this.playerStatus = "dnd";
+    } else if (this.beforeFocusStatus !== null) {
+      this.playerStatus = this.beforeFocusStatus;
+      this.beforeFocusStatus = null;
+    } else if (!this.isLive) {
+      this.playerStatus = room?.kind === "meeting" ? "call" : "online";
+    }
+    if (this.playerRig) this.updateRigStatus(this.playerRig, this.playerStatus);
+  }
+
   private updateRoomCheck() {
     const now = performance.now();
     if (now - this.lastRoomCheck < 200) return;
@@ -4976,13 +5016,7 @@ export class OfficeEngine {
     const nextRoom = room ?? null;
     if (nextRoom?.id !== this.currentRoom?.id) {
       this.currentRoom = nextRoom;
-      if (nextRoom?.kind === "focus") {
-        this.playerStatus = "dnd";
-      } else if (nextRoom?.kind === "meeting") {
-        this.playerStatus = "call";
-      } else {
-        this.playerStatus = "online";
-      }
+      this.updatePlayerRoomStatus(nextRoom);
       this.callbacks.onRoomChange(nextRoom);
     }
   }

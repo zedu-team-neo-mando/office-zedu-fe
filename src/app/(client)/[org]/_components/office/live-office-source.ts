@@ -351,6 +351,7 @@ export class LiveOfficeSource implements OfficeSource {
 
   private orgId = "";
   private userId = "";
+  private previousPresenceStatus: OfficeOccupant["status"] = "online";
   private channelRoomMap: Record<string, string> = {};
   private dmOfficeMap: Record<string, string> = {};
   private dmRoomMap: Record<string, string> = {};
@@ -576,9 +577,17 @@ export class LiveOfficeSource implements OfficeSource {
     throw new Error("Zoe could not answer that right now.");
   }
 
+  private presenceStatus(roomId: string): OfficeOccupant["status"] {
+    return this.rooms.find((room) => room.id === roomId)?.kind === "focus"
+      ? "dnd"
+      : this.previousPresenceStatus;
+  }
+
   async enterRoom(roomId: string) {
     unwrap(
-      await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/enter`, {}),
+      await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/enter`, {
+        status: this.presenceStatus(roomId),
+      }),
       "The room could not be entered."
     );
   }
@@ -601,7 +610,11 @@ export class LiveOfficeSource implements OfficeSource {
     // toast, it only hands its status back to the caller to back off with.
     const response = await BuzzRequest(
       `/office/rooms/${encodeRoomId(roomId)}/presence`,
-      { position: { x, y: 0, z }, rotation: yaw }
+      {
+        position: { x, y: 0, z },
+        rotation: yaw,
+        status: this.presenceStatus(roomId),
+      }
     );
     const status = response?.status ?? response?.response?.status;
     // No answer at all: 0 tells the caller to back off and try again later.
@@ -660,7 +673,16 @@ export class LiveOfficeSource implements OfficeSource {
       upserts: Map<string, OfficeOccupant>;
     } | null = null;
 
-    const emit = () => onPresence([...roster.values()]);
+    const emit = () => {
+      const own = roster.get(this.userId);
+      if (
+        own &&
+        this.rooms.find((room) => room.id === roomId)?.kind !== "focus"
+      ) {
+        this.previousPresenceStatus = own.status;
+      }
+      onPresence([...roster.values()]);
+    };
 
     /** A record only overwrites the one held when it is not provably older. */
     const apply = (

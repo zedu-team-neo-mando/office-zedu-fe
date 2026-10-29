@@ -857,23 +857,38 @@ export default function OfficeDemo({
 
   // Presence is merged rather than replaced: the room snapshot and the
   // realtime stream both carry the same people.
-  const mergePresence = useCallback((occupants: OfficeOccupant[]) => {
-    // Convert to PresencePoint for the HUD
-    const points: PresencePoint[] = occupants.map((occ) => ({
-      id: occ.userId,
-      name: occ.displayName || occ.username || "Someone",
-      x: occ.position?.x ?? 0,
-      z: occ.position?.z ?? 0,
-      roomId: occ.roomId,
-      status: occ.status ?? "online",
-      tint: occ.avatar?.tint,
-    }));
+  const confirmedFocusRef = useRef<string | null>(null);
+  const mergePresence = useCallback(
+    (occupants: OfficeOccupant[]) => {
+      // Convert to PresencePoint for the HUD
+      const points: PresencePoint[] = occupants.map((occ) => ({
+        id: occ.userId,
+        name: occ.displayName || occ.username || "Someone",
+        x: occ.position?.x ?? 0,
+        z: occ.position?.z ?? 0,
+        roomId: occ.roomId,
+        status: occ.status ?? "online",
+        tint: occ.avatar?.tint,
+      }));
 
-    setPresence(points);
-    // The engine draws the room's real people. It drops the signed-in person
-    // itself, because that avatar is the one the player is already steering.
-    engineRef.current?.setOccupants(occupants);
-  }, []);
+      setPresence(points);
+      // The engine draws the room's real people. It drops the signed-in person
+      // itself, because that avatar is the one the player is already steering.
+      engineRef.current?.setOccupants(occupants);
+      const own = occupants.find((occupant) => occupant.userId === selfId);
+      if (
+        own?.status === "dnd" &&
+        own.roomId === stateRef.current.roomId &&
+        roomById[own.roomId]?.kind === "focus"
+      ) {
+        if (confirmedFocusRef.current !== own.roomId) {
+          confirmedFocusRef.current = own.roomId;
+          showInfo("Focus mode", "Your status is now Do not disturb.");
+        }
+      } else if (own) confirmedFocusRef.current = null;
+    },
+    [selfId, roomById]
+  );
 
   // Presence, room entry and movement publishing all follow the room the user
   // is in, and all of them are sequenced in one place.
@@ -966,6 +981,7 @@ export default function OfficeDemo({
       setSelectedFurnitureId(null);
     }
 
+    if (room?.kind !== "focus") confirmedFocusRef.current = null;
     setRoomId(nextId);
 
     if (!room) {
@@ -979,7 +995,8 @@ export default function OfficeDemo({
       room?.kind === "focus" &&
       roomById[previousId ?? ""]?.kind !== "focus"
     ) {
-      showInfo("Focus mode", "Your status is now Do not disturb.");
+      if (source.mode === "demo")
+        showInfo("Focus mode", "Your status is now Do not disturb.");
     }
   }
 
