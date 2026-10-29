@@ -238,15 +238,39 @@ const AREA_FALLBACK_ROOM: OfficeRoom = {
 };
 
 /**
+ * Personal offices carry no server-side copy. Derive it from the requester's
+ * access: only the owner may furnish, DM guests visit read-only, and everyone
+ * else sees a closed door.
+ */
+function describeRoom(
+  room: OfficeApiRoom,
+  template: OfficeRoom,
+  viewerId: string
+): string {
+  if (room.kind !== "personal") return template.description;
+
+  if (room.isLocked) {
+    return `${room.name}'s private office is locked. Only their DM guests can visit.`;
+  }
+
+  if (room.refId === viewerId) {
+    return "Yours to furnish. Guests visit read-only.";
+  }
+
+  return "Private office. Read-only for DM guests.";
+}
+
+/**
  * The building's floor plan is fixed; the rooms inside it are real. Each real
  * room takes the next free slot of its kind, so the organisation's own
  * channels and people end up in the rooms a visitor would expect.
  *
  * Room bounds come from the API (OfficeApiRoom.bounds), which is the source
- * of truth. The static ROOMS slots are only used for description and fallback
- * capacity when the API doesn't provide one.
+ * of truth. The static ROOMS slots supply the palette, a fallback capacity and
+ * the copy for shared rooms; a personal office's copy follows the requester's
+ * access.
  */
-function buildRooms(apiRooms: OfficeApiRoom[]): OfficeRoom[] {
+function buildRooms(apiRooms: OfficeApiRoom[], viewerId: string): OfficeRoom[] {
   const slots: Record<string, OfficeRoom[]> = {
     channel: ROOMS.filter((room) => room.kind === "channel"),
     personal: ROOMS.filter((room) => room.kind === "personal"),
@@ -306,7 +330,7 @@ function buildRooms(apiRooms: OfficeApiRoom[]): OfficeRoom[] {
       // Only a channel or a DM-backed private office has a conversation.
       // Shared spaces keep their 2D description instead of an empty chat.
       chat: room.kind === "channel" || room.kind === "personal",
-      description: template.description,
+      description: describeRoom(room, template, viewerId),
       ownerId: room.refId,
       floorIndex: room.floorIndex ?? 0,
       bounds,
@@ -382,7 +406,7 @@ export class LiveOfficeSource implements OfficeSource {
       ])
     );
 
-    this.rooms = buildRooms(data.rooms ?? []);
+    this.rooms = buildRooms(data.rooms ?? [], this.userId);
     this.floors = data.floors ?? [];
     // The member roster is what makes the tower a directory of people rather
     // than a row of anonymous offices. A bootstrap from an older backend has
