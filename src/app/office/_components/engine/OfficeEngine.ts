@@ -590,6 +590,7 @@ export class OfficeEngine {
       this.rooms.find((item) => item.kind !== "area") ??
       this.rooms[0];
     if (!room) return;
+    this.standUp();
     this.playerPosition.set(room.spawn.x, 0, room.spawn.z);
     this.playerYaw = Math.PI;
     this.path = [];
@@ -724,6 +725,7 @@ export class OfficeEngine {
     if ((room.floorIndex ?? 0) !== this.activeFloor) {
       this.setActiveFloor(room.floorIndex ?? 0);
     }
+    this.standUp();
     this.playerPosition.set(room.spawn.x, 0, room.spawn.z);
     this.playerYaw = Math.PI;
     this.path = [];
@@ -1133,6 +1135,7 @@ export class OfficeEngine {
     if ((room.floorIndex ?? 0) !== this.activeFloor) {
       this.setActiveFloor(room.floorIndex ?? 0);
     }
+    this.standUp();
     this.playerPosition.set(room.spawn.x, 0, room.spawn.z);
     this.playerYaw = Math.PI;
     this.path = [];
@@ -1157,6 +1160,7 @@ export class OfficeEngine {
   }
 
   movePlayerTo(x: number, z: number, yaw?: number) {
+    this.standUp();
     this.playerPosition.set(x, 0, z);
     this.playerVelocity.set(0, 0);
     this.path = [];
@@ -4101,6 +4105,15 @@ export class OfficeEngine {
   // --------------------------------------------------------------- input
 
   // ------------------------------------------------------------------ seats
+
+  /**
+   * Leaves any seat the player is in or walking to. A teleport moves the
+   * player instantly, so the avatar must not stay drawn on the old chair.
+   */
+  private standUp() {
+    this.seated = null;
+    this.pendingSeat = null;
+  }
 
   /** The chair, sofa, armchair or bean bag under the pointer, if any. */
   private seatUnderPointer(): THREE.Object3D | null {
