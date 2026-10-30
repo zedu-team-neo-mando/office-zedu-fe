@@ -426,6 +426,11 @@ export class OfficeEngine {
 
   private colliders: Collider[] = [];
   private wallColliders: Collider[] = [];
+  private occlusionWalls: Array<{
+    mesh: THREE.Mesh<THREE.BoxGeometry, THREE.Material>;
+    bounds: THREE.Box3;
+    depthWrite: boolean;
+  }> = [];
   private staticColliders: Collider[] = [];
   private furnitureColliders: Collider[] = [];
 
@@ -1201,6 +1206,7 @@ export class OfficeEngine {
     if (this.tower) this.scene.remove(this.tower.group);
     this.tower = null;
 
+    this.occlusionWalls = [];
     disposeObject(this.scene);
     this.skyTexture?.dispose();
     this.skyTexture = null;
@@ -1254,6 +1260,7 @@ export class OfficeEngine {
       }
     }
 
+    this.occlusionWalls = [];
     this.colliders = [];
     this.wallColliders = [];
     this.staticColliders = [];
@@ -2477,8 +2484,20 @@ export class OfficeEngine {
     collider = true,
     yOverride?: number
   ) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, height, d), material);
+    // Walls share palette materials, but only the obstructing wall may fade.
+    const opaque = !material.transparent && material.opacity === 1;
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(w, height, d),
+      opaque ? material.clone() : material
+    );
     mesh.position.set(x, yOverride ?? height / 2, z);
+    if (opaque) {
+      this.occlusionWalls.push({
+        mesh,
+        bounds: new THREE.Box3().setFromObject(mesh).expandByScalar(0.08),
+        depthWrite: material.depthWrite,
+      });
+    }
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.buildingGroup.add(mesh);
@@ -4685,6 +4704,7 @@ export class OfficeEngine {
       this.tower?.update(elapsed);
       this.updateTowerCamera(dt);
       this.updateTowerHover();
+      this.updateWallOcclusion(dt);
       this.renderer.render(this.scene, this.camera);
       return;
     }
@@ -4696,6 +4716,7 @@ export class OfficeEngine {
     this.updateBubbles();
     this.updateLabels();
     this.updateCamera(dt);
+    this.updateWallOcclusion(dt);
     this.updateMarker();
     this.updateRoomCheck();
     this.updateProximity();
@@ -5051,6 +5072,58 @@ export class OfficeEngine {
     this.cameraTarget.lerp(focus, Math.min(dt * 8, 1));
     this.camera.position.copy(this.cameraPosition);
     this.camera.lookAt(this.cameraTarget);
+  }
+
+  private updateWallOcclusion(dt: number) {
+    const following =
+      this.view === "floor" && !this.cinematic && this.playerRig;
+    const targets: THREE.Vector3[] = [];
+    if (following) {
+      // Sample the body as well as the head: a low partition can hide the legs
+      // without crossing the camera's look-at point.
+      for (const height of [0.35, 1.1, 1.75]) {
+        for (const side of [-0.28, 0.28]) {
+          targets.push(
+            new THREE.Vector3(
+              this.playerPosition.x + Math.cos(this.cameraYaw) * side,
+              height,
+              this.playerPosition.z - Math.sin(this.cameraYaw) * side
+            )
+          );
+        }
+      }
+    }
+    const rays = targets.map((target) => ({
+      ray: new THREE.Ray(
+        this.camera.position,
+        target.clone().sub(this.camera.position).normalize()
+      ),
+      distanceSquared: target.distanceToSquared(this.camera.position),
+    }));
+    const hit = new THREE.Vector3();
+    for (const wall of this.occlusionWalls) {
+      const obscures = rays.some(({ ray, distanceSquared }) => {
+        if (wall.bounds.containsPoint(this.camera.position)) return true;
+        return (
+          ray.intersectBox(wall.bounds, hit) !== null &&
+          hit.distanceToSquared(this.camera.position) < distanceSquared
+        );
+      });
+      const material = wall.mesh.material;
+      const opacity = THREE.MathUtils.damp(
+        material.opacity,
+        obscures ? 0.35 : 1,
+        18,
+        dt
+      );
+      const fading = obscures || opacity < 0.995;
+      if (material.transparent !== fading) {
+        material.transparent = fading;
+        material.needsUpdate = true;
+      }
+      material.opacity = fading ? opacity : 1;
+      material.depthWrite = fading ? false : wall.depthWrite;
+    }
   }
 
   private updateMarker() {
