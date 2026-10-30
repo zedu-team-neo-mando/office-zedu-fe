@@ -1212,6 +1212,7 @@ These rules are the source of truth for the office work; check every visual chan
 14. **An office shows the same person as the floor does.** The avatar in a cell is that person's own identity — the same tint their in-world rig is built from — not the room's accent colour.
 15. **Leaving the office means going back to the app.** The tower's leave control returns to the 2D conversation: the organisation's chat in the live office, the site home in the demo. The tower carries no "back to the floor" control; Esc still does that.
 16. **The entry copy steps back for the building.** After 30 seconds without input the entry headline, description and chips fade out and the scrim thins with them so the rotating tower/floor backdrop is visible; any movement brings the copy straight back.
+17. **A private office is furnished, not a cubicle.** Every personal office starts with the same editable layout (`personalOfficeTemplate`): the desk stands out in the room on its own rug with the chair behind it, and the back wall holds a plant, an open bookshelf, a reading lamp and a framed print. The tower cell shows the same desk, plant and bookshelf. Everything uses the building's one palette (`engine/palette.ts`), and any chair, sofa, armchair or bean bag can be sat on.
 
 ---
 

@@ -986,6 +986,32 @@ export class TowerScene {
       }
     }
 
+    // The same bookshelf the walk-in office has against its back wall.
+    if (personal && w >= 0.9) {
+      const shelfH = Math.min(h * 0.55, 0.95);
+      const shelfX = rect.x + w * 0.33;
+      const shelfZ = zBack + 0.16;
+      const shelf = new THREE.Mesh(
+        new THREE.BoxGeometry(0.34, shelfH, 0.16),
+        new THREE.MeshStandardMaterial({ color: PALETTE.desk, roughness: 0.8 })
+      );
+      shelf.position.set(shelfX, bottom + shelfH / 2, shelfZ);
+      this.shell.add(shelf);
+      const rows = [PALETTE.accent, PALETTE.pot, PALETTE.screen];
+      rows.forEach((color, row) => {
+        const books = new THREE.Mesh(
+          new THREE.BoxGeometry(0.28, shelfH * 0.2, 0.02),
+          new THREE.MeshStandardMaterial({ color, roughness: 0.9 })
+        );
+        books.position.set(
+          shelfX,
+          bottom + shelfH * (0.2 + row * 0.29),
+          shelfZ + 0.085
+        );
+        this.shell.add(books);
+      });
+    }
+
     const cell: OfficeCell = {
       office,
       mesh: back,

@@ -145,8 +145,8 @@ export default function ZoeDialog({
       onOpenChange={(next) => (!next ? onClose() : undefined)}
     >
       <DialogContent
-        className="office-dialog-content flex h-[min(40rem,88vh)] w-[min(42rem,94vw)] flex-col overflow-hidden rounded-3xl p-0"
-        overlayClassName="office-dialog-overlay"
+        className="office-dialog-content z-[70] flex h-[min(40rem,88vh)] w-[min(42rem,94vw)] flex-col overflow-hidden rounded-3xl p-0"
+        overlayClassName="office-dialog-overlay z-[65]"
       >
         <div className="flex items-center gap-3 border-b border-white/8 px-5 py-4">
           <span className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-[#f4c46a] to-[#c98b2e] text-[#1a1208]">

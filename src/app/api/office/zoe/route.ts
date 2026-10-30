@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import { SignJWT, jwtVerify } from "jose";
+import { ZoeRequestSchema } from "~/lib/zoe/request-contract";
 
 /**
  * Proxies a question to the contributor helper so Zoe can answer with the
@@ -20,24 +20,6 @@ import { SignJWT, jwtVerify } from "jose";
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 30; // per user per minute
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? "");
-
-// ---- Zod schemas ----
-const ZoeRequestSchema = z.object({
-  question: z.string().min(1).max(2000),
-  context: z.object({
-    room: z.object({
-      id: z.string(),
-      kind: z.string(),
-      name: z.string(),
-    }),
-    nearbyUsers: z.array(
-      z.object({
-        displayName: z.string(),
-        status: z.string(),
-      })
-    ),
-  }),
-});
 
 // ---- In-memory rate limiter (single-instance deploy) ----
 const rateLimitMap = new Map<string, number[]>();

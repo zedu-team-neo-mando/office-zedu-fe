@@ -59,6 +59,7 @@ export interface FurnitureItem {
   z: number;
   rotation: 0 | 90 | 180 | 270;
   variant?: string;
+  roomId?: string;
 }
 
 export interface CatalogItem {
@@ -385,19 +386,19 @@ export const ROOM_BY_ID: Record<string, OfficeRoom> = Object.fromEntries(
 
 export const DEFAULT_ROOM = ROOM_BY_ID.reception;
 
-export const ROOM_GROUPS: Array<{ label: string; ids: string[] }> = [
+export const ROOM_GROUPS: Array<{
+  label: string;
+  ids: string[];
+  kind?: RoomKind;
+}> = [
   {
     label: "Shared spaces",
     ids: ["reception", "lounge", "meeting:1", "meeting:2"],
   },
   {
     label: "Channels",
-    ids: [
-      "channel:general",
-      "channel:design",
-      "channel:dev",
-      "channel:marketing",
-    ],
+    kind: "channel",
+    ids: [],
   },
   { label: "Focus pods", ids: ["focus:1", "focus:2", "focus:3", "focus:4"] },
   {
@@ -426,8 +427,8 @@ export const FURNITURE_CATALOG: CatalogItem[] = [
     rotatable: true,
     collision: true,
     maxPerRoom: 8,
-    color: "#7c5cff",
-    blurb: "Purple mesh back, five-star base.",
+    color: "#40514a",
+    blurb: "Mesh back, five-star base.",
   },
   {
     id: "table_meeting",
@@ -503,7 +504,7 @@ export const FURNITURE_CATALOG: CatalogItem[] = [
     rotatable: true,
     collision: false,
     maxPerRoom: 2,
-    color: "#7c5cff",
+    color: "#2d7663",
     blurb: "Defines a zone without a wall.",
   },
   {
@@ -539,7 +540,59 @@ export const FURNITURE_CATALOG: CatalogItem[] = [
     color: "#e879a7",
     blurb: "For the 3pm dip.",
   },
+  {
+    id: "armchair",
+    name: "Armchair",
+    category: "Lounge",
+    footprint: { w: 1, d: 1 },
+    rotatable: true,
+    collision: true,
+    maxPerRoom: 4,
+    color: "#c38a64",
+    blurb: "A deep seat for reading or a call.",
+  },
+  {
+    id: "coffee_bar",
+    name: "Coffee bar",
+    category: "Lounge",
+    footprint: { w: 2, d: 1 },
+    rotatable: true,
+    collision: true,
+    maxPerRoom: 1,
+    color: "#88684c",
+    blurb: "Espresso machine and a row of mugs.",
+  },
+  {
+    id: "cabinet",
+    name: "Filing cabinet",
+    category: "Work",
+    footprint: { w: 1, d: 1 },
+    rotatable: true,
+    collision: true,
+    maxPerRoom: 3,
+    color: "#9aa4ac",
+    blurb: "Three drawers for the paperwork.",
+  },
+  {
+    id: "art_easel",
+    name: "Art easel",
+    category: "Decor",
+    footprint: { w: 1, d: 1 },
+    rotatable: true,
+    collision: true,
+    maxPerRoom: 2,
+    color: "#ffe7bd",
+    blurb: "A framed print to make it yours.",
+  },
 ];
+
+/** Furniture you can sit on, and how high its seat is. */
+export const SEAT_HEIGHT: Record<string, number> = {
+  chair_ergo: 0.5,
+  sofa: 0.6,
+  beanbag: 0.42,
+  armchair: 0.48,
+};
 
 export const CATALOG_BY_ID: Record<string, CatalogItem> = Object.fromEntries(
   FURNITURE_CATALOG.map((item) => [item.id, item])

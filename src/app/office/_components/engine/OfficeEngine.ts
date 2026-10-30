@@ -6,6 +6,7 @@ import {
   FURNITURE_CATALOG,
   ROOM_BY_ID,
   ROOMS,
+  SEAT_HEIGHT,
   type AvatarConfig,
   type DemoUser,
   type FurnitureItem,
@@ -14,6 +15,7 @@ import {
   furnitureAabb,
   validatePlacement,
 } from "../office-data";
+import { floorLayoutItems, roomLayoutItems } from "../office-layout";
 import type { OfficeFloor, OfficeOccupant } from "~/types/office";
 import { TowerScene, type TowerOffice } from "./tower-scene";
 import { INK_CSS, PALETTE, PAPER_CSS } from "./palette";
@@ -71,6 +73,9 @@ interface AvatarRig {
   torso: THREE.Mesh;
   ring: THREE.Mesh;
   phase: number;
+  targetX?: number;
+  targetZ?: number;
+  targetYaw?: number;
   bubble?: {
     sprite: THREE.Sprite;
     material: THREE.SpriteMaterial;
@@ -421,6 +426,11 @@ export class OfficeEngine {
 
   private colliders: Collider[] = [];
   private wallColliders: Collider[] = [];
+  private occlusionWalls: Array<{
+    mesh: THREE.Mesh<THREE.BoxGeometry, THREE.Material>;
+    bounds: THREE.Box3;
+    depthWrite: boolean;
+  }> = [];
   private staticColliders: Collider[] = [];
   private furnitureColliders: Collider[] = [];
 
@@ -441,6 +451,9 @@ export class OfficeEngine {
   private path: Array<{ x: number; z: number }> = [];
   private pathIndex = 0;
   private lastInputAt = 0;
+  /** The seat the player is sitting on, and the one they are walking to. */
+  private seated: THREE.Object3D | null = null;
+  private pendingSeat: THREE.Object3D | null = null;
 
   private playerRig: AvatarRig | null = null;
   private playerStatus: PresenceStatus = "online";
@@ -583,10 +596,24 @@ export class OfficeEngine {
     this.playerVelocity.set(0, 0);
     this.cameraTarget.set(room.spawn.x, 1.25, room.spawn.z);
     this.playerRig?.group.position.set(room.spawn.x, 0, room.spawn.z);
+    this.currentRoom = room;
+    this.callbacks.onRoomChange(room);
   }
 
   private roomsOnFloor(index: number): OfficeRoom[] {
     return this.allRooms.filter((room) => (room.floorIndex ?? 0) === index);
+  }
+
+  private getFloorCommonRoom(index: number): OfficeRoom | null {
+    const floorRooms = this.roomsOnFloor(index);
+    return (
+      floorRooms.find((room) => room.kind === "reception") ??
+      floorRooms.find((room) => room.id === "reception") ??
+      floorRooms.find((room) => room.kind === "lobby") ??
+      floorRooms.find((room) => room.kind === "area") ??
+      floorRooms[0] ??
+      null
+    );
   }
 
   /** Give the tower the floor directory and the people who sit in it. */
@@ -607,6 +634,8 @@ export class OfficeEngine {
   setView(view: "floor" | "tower") {
     if (this.view === view) return;
     this.view = view;
+    this.towerPointer = null;
+    this.setTowerHover(null);
     this.applyBackdrop(view);
 
     const floorGroups = [
@@ -712,16 +741,18 @@ export class OfficeEngine {
   pulseOffice(roomId: string, floorIndex: number | null) {
     if (!this.tower) return;
     this.tower.pulse(roomId);
-    if (floorIndex !== null) this.tower.focusFloor(floorIndex);
+    if (floorIndex !== null) this.focusTowerFloor(floorIndex);
   }
 
   /** Frame one storey of the tower, or the whole tower when null. */
   focusTowerFloor(index: number | null) {
+    this.setTowerHover(null);
     this.tower?.focusFloor(index);
   }
 
   /** Frame one office: the camera pans along the facade to reach it. */
   focusTowerRoom(roomId: string | null) {
+    this.setTowerHover(null);
     this.tower?.focusRoom(roomId);
   }
 
@@ -758,6 +789,8 @@ export class OfficeEngine {
   private ghostReason: string | null = null;
   private lastGhostState = "";
 
+  private towerPointer: { x: number; y: number } | null = null;
+  private towerHover: TowerOffice | null = null;
   private pointerDown = false;
   private pointerStart = { x: 0, y: 0 };
   private pointerDragged = false;
@@ -780,6 +813,7 @@ export class OfficeEngine {
   private boundPointerDown: (event: PointerEvent) => void;
   private boundPointerMove: (event: PointerEvent) => void;
   private boundPointerUp: (event: PointerEvent) => void;
+  private boundPointerLeave: () => void;
   private boundWheel: (event: WheelEvent) => void;
   private boundResize: () => void;
 
@@ -814,7 +848,9 @@ export class OfficeEngine {
       this.syncZoe();
       const entrance =
         this.rooms.find((room) => room.kind === "reception") ??
-        this.rooms.find((room) => room.kind === "lobby");
+        this.rooms.find((room) => room.id === "reception") ??
+        this.rooms.find((room) => room.kind === "lobby") ??
+        this.rooms[0];
       if (entrance) {
         this.playerPosition.set(entrance.spawn.x, 0, entrance.spawn.z);
         this.cameraTarget.set(entrance.spawn.x, 1.25, entrance.spawn.z);
@@ -871,6 +907,10 @@ export class OfficeEngine {
     this.boundPointerDown = (event) => this.onPointerDown(event);
     this.boundPointerMove = (event) => this.onPointerMove(event);
     this.boundPointerUp = (event) => this.onPointerUp(event);
+    this.boundPointerLeave = () => {
+      this.towerPointer = null;
+      this.setTowerHover(null);
+    };
     this.boundWheel = (event) => this.onWheel(event);
     this.boundResize = () => this.resize();
 
@@ -883,6 +923,10 @@ export class OfficeEngine {
     this.renderer.domElement.addEventListener(
       "pointerdown",
       this.boundPointerDown
+    );
+    this.renderer.domElement.addEventListener(
+      "pointerleave",
+      this.boundPointerLeave
     );
     window.addEventListener("pointermove", this.boundPointerMove);
     window.addEventListener("pointerup", this.boundPointerUp);
@@ -898,6 +942,9 @@ export class OfficeEngine {
 
     this.resize();
     this.callbacks.onReady();
+    if (this.currentRoom) {
+      this.callbacks.onRoomChange(this.currentRoom);
+    }
     this.loop();
   }
 
@@ -932,21 +979,12 @@ export class OfficeEngine {
 
   /**
    * Only the furniture of rooms on the floor being shown is drawn: offices on
-   * different member floors share the same coordinates.
+   * different member floors share the same coordinates, so the room id on the
+   * item decides, not the position alone.
    */
   private visibleFurniture(): FurnitureItem[] {
     if (!this.isLive) return this.furnitureItems;
-    return this.furnitureItems.filter((item) => {
-      const room = this.allRooms.find(
-        (candidate) =>
-          (candidate.floorIndex ?? 0) === this.activeFloor &&
-          item.x >= candidate.bounds.x &&
-          item.x <= candidate.bounds.x + candidate.bounds.w &&
-          item.z >= candidate.bounds.z &&
-          item.z <= candidate.bounds.z + candidate.bounds.d
-      );
-      return Boolean(room);
-    });
+    return floorLayoutItems(this.furnitureItems, this.rooms);
   }
 
   private renderFurniture() {
@@ -968,6 +1006,17 @@ export class OfficeEngine {
     this.refreshSelection();
   }
 
+  setSelfId(selfId: string) {
+    if (this.selfId === selfId) return;
+    this.selfId = selfId;
+    const existingSelf = this.agentRigs.get(selfId);
+    if (existingSelf) {
+      this.avatarGroup.remove(existingSelf.group);
+      disposeObject(existingSelf.group);
+      this.agentRigs.delete(selfId);
+    }
+  }
+
   // Reconciles the roster of other people in the office. Called from the
   // live source whenever the roster changes (join, update, leave).
   setOccupants(occupants: OfficeOccupant[]) {
@@ -978,6 +1027,10 @@ export class OfficeEngine {
       if (occ.userId === this.selfId || occ.userId === "you") continue; // self is rendered separately
 
       let rig = this.agentRigs.get(occ.userId);
+      const posX = occ.position?.x ?? 0;
+      const posZ = occ.position?.z ?? (occ.position as any)?.y ?? 0;
+      const yaw = occ.rotation ?? 0;
+
       if (!rig) {
         rig = this.createAvatar(
           occ.avatar,
@@ -987,12 +1040,27 @@ export class OfficeEngine {
           false,
           false
         );
+        rig.group.position.set(posX, 0, posZ);
+        rig.group.rotation.y = yaw;
+        rig.targetX = posX;
+        rig.targetZ = posZ;
+        rig.targetYaw = yaw;
         this.agentRigs.set(occ.userId, rig);
         this.avatarGroup.add(rig.group);
+      } else {
+        const dx = posX - rig.group.position.x;
+        const dz = posZ - rig.group.position.z;
+        const dist = Math.hypot(dx, dz);
+        // If occupant teleported or changed room/spawn (> 6m), snap immediately
+        if (dist > 6) {
+          rig.group.position.set(posX, 0, posZ);
+          rig.group.rotation.y = yaw;
+        }
+        rig.targetX = posX;
+        rig.targetZ = posZ;
+        rig.targetYaw = yaw;
       }
 
-      rig.group.position.set(occ.position.x, 0, occ.position.z);
-      rig.group.rotation.y = occ.rotation ?? 0;
       this.updateRigStatus(rig, occ.status);
       next.set(occ.userId, rig);
     }
@@ -1002,7 +1070,6 @@ export class OfficeEngine {
       if (!next.has(id)) {
         this.avatarGroup.remove(rig.group);
         disposeObject(rig.group);
-        this.agentRigs.delete(id);
       }
     }
 
@@ -1067,7 +1134,7 @@ export class OfficeEngine {
       this.setActiveFloor(room.floorIndex ?? 0);
     }
     this.playerPosition.set(room.spawn.x, 0, room.spawn.z);
-    this.playerYaw = room.id === "reception" ? Math.PI : Math.PI;
+    this.playerYaw = Math.PI;
     this.path = [];
     this.playerVelocity.set(0, 0);
     this.currentRoom = room;
@@ -1129,12 +1196,17 @@ export class OfficeEngine {
       "pointerdown",
       this.boundPointerDown
     );
+    this.renderer.domElement.removeEventListener(
+      "pointerleave",
+      this.boundPointerLeave
+    );
     this.renderer.domElement.removeEventListener("wheel", this.boundWheel);
 
     this.tower?.dispose();
     if (this.tower) this.scene.remove(this.tower.group);
     this.tower = null;
 
+    this.occlusionWalls = [];
     disposeObject(this.scene);
     this.skyTexture?.dispose();
     this.skyTexture = null;
@@ -1188,6 +1260,7 @@ export class OfficeEngine {
       }
     }
 
+    this.occlusionWalls = [];
     this.colliders = [];
     this.wallColliders = [];
     this.staticColliders = [];
@@ -2099,7 +2172,12 @@ export class OfficeEngine {
           break;
         }
         case "personal": {
-          this.addPrivateOffice(room);
+          // Right of centre: the starter bookshelf stands to its left.
+          this.addWallArt(
+            cx + (b.w >= 4.2 ? 0.55 : 0),
+            b.z,
+            Math.min(1.2, b.w * 0.28)
+          );
           break;
         }
         case "area": {
@@ -2118,29 +2196,6 @@ export class OfficeEngine {
         }
       }
     }
-  }
-
-  /**
-   * A private office, not a cubicle: a desk on the wall you enter against,
-   * storage, a rug and something green. A 5 by 5.4 room holds all of it and
-   * still leaves the walk-in point clear.
-   */
-  private addPrivateOffice(room: OfficeRoom) {
-    const b = room.bounds;
-    const cx = b.x + b.w / 2;
-    this.addWorkstation(cx, b.z + Math.min(1.3, b.d * 0.26));
-    this.addWallArt(cx, b.z, Math.min(1.2, b.w * 0.28));
-    if (b.w >= 4.2) this.addCabinet(b.x + 0.6, b.z + b.d - 1.3, 90);
-    if (b.d >= 4.2) {
-      this.addRug(
-        cx,
-        b.z + b.d * 0.66,
-        Math.min(b.w - 1.8, 2.6),
-        Math.min(b.d * 0.3, 1.5),
-        PALETTE.sofa
-      );
-    }
-    this.addPlant(b.x + b.w - 0.7, b.z + 0.75);
   }
 
   /** A desk with its screen, keyboard and chair — what an office is judged by. */
@@ -2429,8 +2484,20 @@ export class OfficeEngine {
     collider = true,
     yOverride?: number
   ) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, height, d), material);
+    // Walls share palette materials, but only the obstructing wall may fade.
+    const opaque = !material.transparent && material.opacity === 1;
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(w, height, d),
+      opaque ? material.clone() : material
+    );
     mesh.position.set(x, yOverride ?? height / 2, z);
+    if (opaque) {
+      this.occlusionWalls.push({
+        mesh,
+        bounds: new THREE.Box3().setFromObject(mesh).expandByScalar(0.08),
+        depthWrite: material.depthWrite,
+      });
+    }
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.buildingGroup.add(mesh);
@@ -2512,9 +2579,15 @@ export class OfficeEngine {
     const catalog = CATALOG_BY_ID[item.catalogId];
     if (!catalog) return null;
     const group = this.buildFurnitureMesh(item.catalogId, catalog.color);
-    group.position.set(item.x, 0, item.z);
+    // A rug is 2cm thick; in the live building it lies on the room's 0.1 floor
+    // pad instead of being drawn underneath it.
+    const onPad = this.isLive && item.catalogId === "rug" ? 0.1 : 0;
+    group.position.set(item.x, onPad, item.z);
     group.rotation.y = (item.rotation * Math.PI) / 180;
     group.userData.furnitureId = item.id;
+    if (SEAT_HEIGHT[item.catalogId]) {
+      group.userData.seatHeight = SEAT_HEIGHT[item.catalogId];
+    }
     return group;
   }
 
@@ -2802,30 +2875,38 @@ export class OfficeEngine {
         break;
       }
       case "shelf": {
-        add(new THREE.BoxGeometry(0.9, 1.8, 0.35), wood, 0, 0.9, 0);
-        for (const y of [0.45, 0.85, 1.25, 1.65]) {
-          add(
-            new THREE.BoxGeometry(0.84, 0.04, 0.3),
-            new THREE.MeshStandardMaterial({ color: dark, roughness: 0.9 }),
-            0,
-            y,
-            0.02
-          );
+        // Open at the front, so the books on every shelf can be seen.
+        add(new THREE.BoxGeometry(0.9, 1.8, 0.04), wood, 0, 0.9, -0.155);
+        for (const x of [-0.425, 0.425]) {
+          add(new THREE.BoxGeometry(0.05, 1.8, 0.35), wood, x, 0.9, 0);
+        }
+        for (const y of [0.03, 0.47, 0.91, 1.35, 1.78]) {
+          add(new THREE.BoxGeometry(0.8, 0.04, 0.33), wood, 0, y, 0);
         }
         const bookColors = [
-          0x7141f8, 0x22d3ee, 0xf472b6, 0xf59e0b, 0x34d399, 0xe5e7eb,
+          PALETTE.accent,
+          PALETTE.screen,
+          PALETTE.pot,
+          PALETTE.glow,
+          PALETTE.sofa,
+          PALETTE.wallShade,
         ];
-        for (let i = 0; i < 12; i += 1) {
-          add(
-            new THREE.BoxGeometry(0.08, 0.24, 0.2),
-            new THREE.MeshStandardMaterial({
-              color: bookColors[i % bookColors.length],
-              roughness: 0.9,
-            }),
-            -0.3 + (i % 5) * 0.14,
-            0.58 + Math.floor(i / 5) * 0.4,
-            0.03
-          );
+        for (let shelf = 0; shelf < 4; shelf += 1) {
+          for (let i = 0, x = -0.36; x < 0.3; i += 1) {
+            const w = 0.06 + ((shelf * 3 + i) % 3) * 0.02;
+            const h = 0.26 + ((shelf + i) % 3) * 0.04;
+            add(
+              new THREE.BoxGeometry(w, h, 0.22),
+              new THREE.MeshStandardMaterial({
+                color: bookColors[(shelf * 2 + i) % bookColors.length],
+                roughness: 0.9,
+              }),
+              x + w / 2,
+              0.05 + shelf * 0.44 + h / 2,
+              0.02
+            );
+            x += w + 0.015;
+          }
         }
         break;
       }
@@ -2840,6 +2921,125 @@ export class OfficeEngine {
           0,
           0.14,
           0.14
+        );
+        break;
+      }
+      case "armchair": {
+        const cushion = new THREE.MeshStandardMaterial({
+          color: tint.clone().offsetHSL(0, 0, 0.1),
+          roughness: 1,
+        });
+        add(new THREE.BoxGeometry(0.8, 0.3, 0.78), fabric, 0, 0.27, 0);
+        add(new THREE.BoxGeometry(0.62, 0.1, 0.6), cushion, 0, 0.46, 0.05);
+        add(new THREE.BoxGeometry(0.8, 0.62, 0.18), fabric, 0, 0.68, -0.3);
+        for (const x of [-0.34, 0.34]) {
+          add(new THREE.BoxGeometry(0.12, 0.26, 0.74), fabric, x, 0.55, 0);
+        }
+        break;
+      }
+      case "coffee_bar": {
+        add(
+          new THREE.BoxGeometry(1.7, 0.95, 0.62),
+          new THREE.MeshStandardMaterial({ color: tint, roughness: 0.8 }),
+          0,
+          0.475,
+          0
+        );
+        add(new THREE.BoxGeometry(1.8, 0.06, 0.7), white, 0, 0.98, 0);
+        add(new THREE.BoxGeometry(0.42, 0.48, 0.36), metal, -0.45, 1.25, -0.05);
+        add(
+          new THREE.BoxGeometry(0.3, 0.04, 0.04),
+          new THREE.MeshStandardMaterial({
+            color: PALETTE.screen,
+            emissive: PALETTE.screen,
+            emissiveIntensity: 0.8,
+          }),
+          -0.45,
+          1.38,
+          0.14
+        );
+        for (const [i, x] of [0.2, 0.4, 0.6].entries()) {
+          add(
+            new THREE.CylinderGeometry(0.05, 0.045, 0.11, 10),
+            new THREE.MeshStandardMaterial({
+              color: [PALETTE.wall, PALETTE.pot, PALETTE.glow][i],
+              roughness: 0.6,
+            }),
+            x,
+            1.07,
+            0.12
+          );
+        }
+        break;
+      }
+      case "cabinet": {
+        add(new THREE.BoxGeometry(0.6, 1.25, 0.6), wood, 0, 0.625, 0);
+        for (const y of [0.3, 0.7, 1.08]) {
+          add(
+            new THREE.BoxGeometry(0.54, 0.34, 0.02),
+            new THREE.MeshStandardMaterial({ color: dark, roughness: 0.6 }),
+            0,
+            y,
+            0.305
+          );
+          add(new THREE.BoxGeometry(0.2, 0.03, 0.04), white, 0, y + 0.09, 0.33);
+        }
+        break;
+      }
+      case "art_easel": {
+        const frame = new THREE.MeshStandardMaterial({
+          color: PALETTE.woodDark,
+          roughness: 0.6,
+        });
+        for (const x of [-0.3, 0.3]) {
+          add(new THREE.BoxGeometry(0.05, 1.5, 0.05), metal, x, 0.75, 0, -0.12);
+        }
+        add(
+          new THREE.BoxGeometry(0.05, 1.45, 0.05),
+          metal,
+          0,
+          0.72,
+          -0.32,
+          0.4
+        );
+        add(new THREE.BoxGeometry(0.8, 0.06, 0.12), metal, 0, 0.55, 0.06);
+        add(
+          new THREE.BoxGeometry(0.86, 0.66, 0.04),
+          frame,
+          0,
+          0.95,
+          0.03,
+          -0.12
+        );
+        add(
+          new THREE.BoxGeometry(0.74, 0.54, 0.02),
+          wood,
+          0,
+          0.95,
+          0.055,
+          -0.12
+        );
+        add(
+          new THREE.CircleGeometry(0.1, 20),
+          new THREE.MeshStandardMaterial({
+            color: PALETTE.pot,
+            roughness: 0.8,
+          }),
+          0.15,
+          1.03,
+          0.07,
+          -0.12
+        );
+        add(
+          new THREE.BoxGeometry(0.74, 0.14, 0.02),
+          new THREE.MeshStandardMaterial({
+            color: PALETTE.leaf,
+            roughness: 0.8,
+          }),
+          0,
+          0.75,
+          0.09,
+          -0.12
         );
         break;
       }
@@ -3332,10 +3532,12 @@ export class OfficeEngine {
       map: texture,
       transparent: true,
       depthWrite: false,
+      depthTest: false,
     });
     const sprite = new THREE.Sprite(material);
     sprite.position.set(0, 2.75, 0);
     sprite.scale.set(2.7, 1.1, 1);
+    sprite.renderOrder = 11;
     rig.group.add(sprite);
     rig.bubble = {
       sprite,
@@ -3390,10 +3592,11 @@ export class OfficeEngine {
       map: texture,
       transparent: true,
       depthWrite: false,
-      depthTest: true,
+      depthTest: false,
     });
     const sprite = new THREE.Sprite(material);
     sprite.scale.set(2.1, 0.59, 1);
+    sprite.renderOrder = 10;
     return sprite;
   }
 
@@ -3569,6 +3772,7 @@ export class OfficeEngine {
     }
     group.position.set(x, 0, z);
     group.rotation.y = (rotation * Math.PI) / 180;
+    group.userData.seatHeight = 0.47;
     this.staticGroup.add(group);
   }
 
@@ -3600,6 +3804,7 @@ export class OfficeEngine {
     }
     group.position.set(x, 0, z);
     group.rotation.y = (rotation * Math.PI) / 180;
+    group.userData.seatHeight = 0.56;
     this.staticGroup.add(group);
     const rotated = rotation % 180 !== 0;
     const hw = rotated ? 0.6 : 1.15;
@@ -3691,13 +3896,14 @@ export class OfficeEngine {
   }
 
   private addBeanbag(x: number, z: number, color: number) {
+    const group = new THREE.Group();
     const bean = new THREE.Mesh(
       new THREE.SphereGeometry(0.42, 16, 12),
       new THREE.MeshStandardMaterial({ color, roughness: 1 })
     );
-    bean.position.set(x, 0.3, z);
+    bean.position.y = 0.3;
     bean.castShadow = true;
-    this.staticGroup.add(bean);
+    group.add(bean);
     const top = new THREE.Mesh(
       new THREE.SphereGeometry(0.28, 16, 12),
       new THREE.MeshStandardMaterial({
@@ -3705,8 +3911,11 @@ export class OfficeEngine {
         roughness: 1,
       })
     );
-    top.position.set(x, 0.14, z + 0.14);
-    this.staticGroup.add(top);
+    top.position.set(0, 0.14, 0.14);
+    group.add(top);
+    group.position.set(x, 0, z);
+    group.userData.seatHeight = SEAT_HEIGHT.beanbag;
+    this.staticGroup.add(group);
     this.addCollider(x - 0.4, x + 0.4, z - 0.4, z + 0.4);
   }
 
@@ -3891,6 +4100,100 @@ export class OfficeEngine {
 
   // --------------------------------------------------------------- input
 
+  // ------------------------------------------------------------------ seats
+
+  /** The chair, sofa, armchair or bean bag under the pointer, if any. */
+  private seatUnderPointer(): THREE.Object3D | null {
+    const hits = this.raycaster.intersectObjects(
+      [this.buildingGroup, this.staticGroup, this.furnitureGroup],
+      true
+    );
+    for (const hit of hits.slice(0, 1)) {
+      let node: THREE.Object3D | null = hit.object;
+      while (node && node.userData.seatHeight === undefined) {
+        node = node.parent;
+      }
+      if (node) return node;
+    }
+    return null;
+  }
+
+  /**
+   * Walks to a free spot beside the seat; the player sits once they arrive.
+   * The front is tried first, then the sides, so a chair tucked under a desk
+   * is still reachable.
+   */
+  private walkToSeat(seat: THREE.Object3D): boolean {
+    const fx = Math.sin(seat.rotation.y);
+    const fz = Math.cos(seat.rotation.y);
+    const sides = [
+      [fx, fz],
+      [fz, -fx],
+      [-fz, fx],
+      [-fx, -fz],
+    ];
+    const spots = [0.85, 1.1, 1.35].flatMap((reach) =>
+      sides.map(([dx, dz]) => ({
+        x: seat.position.x + dx * reach,
+        z: seat.position.z + dz * reach,
+      }))
+    );
+    for (const { x, z } of spots) {
+      if (this.isBlocked(x, z)) continue;
+      const here = Math.hypot(
+        x - this.playerPosition.x,
+        z - this.playerPosition.z
+      );
+      const path =
+        here < 0.3
+          ? []
+          : this.findPath(this.playerPosition.x, this.playerPosition.z, x, z);
+      if (here >= 0.3 && !path.length) continue;
+      this.path = path;
+      this.pathIndex = 0;
+      this.pendingSeat = seat;
+      this.showMarker(x, z);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Placed furniture is rebuilt whenever a layout changes; keep sitting on the
+   * new copy of the same chair. False when the seat is gone.
+   */
+  private followSeat(): boolean {
+    const seat = this.seated;
+    if (!seat) return false;
+    if (seat.parent) return true;
+    const id = seat.userData.furnitureId as string | undefined;
+    const rebuilt = id ? this.furnitureMeshes.get(id) : undefined;
+    if (!rebuilt?.parent || rebuilt.userData.seatHeight === undefined) {
+      return false;
+    }
+    this.seated = rebuilt;
+    return true;
+  }
+
+  private poseSeated(rig: AvatarRig, seat: THREE.Object3D, elapsed: number) {
+    const height = seat.userData.seatHeight as number;
+    const back = 0.06;
+    rig.group.position.set(
+      seat.position.x - Math.sin(seat.rotation.y) * back,
+      height - 0.74,
+      seat.position.z - Math.cos(seat.rotation.y) * back
+    );
+    rig.group.rotation.y = seat.rotation.y;
+    this.playerYaw = seat.rotation.y;
+    this.playerSpeed = 0;
+    rig.leftLeg.rotation.x = -1.2;
+    rig.rightLeg.rotation.x = -1.2;
+    const breath = Math.sin(elapsed * 1.2 + rig.phase) * 0.03;
+    rig.leftArm.rotation.x = -0.45 + breath;
+    rig.rightArm.rotation.x = -0.45 - breath;
+    rig.ring.visible = false;
+  }
+
   private onKeyDown(event: KeyboardEvent) {
     const target = event.target as HTMLElement | null;
     if (
@@ -3934,9 +4237,43 @@ export class OfficeEngine {
     this.pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
+  private setTowerHover(office: TowerOffice | null) {
+    this.tower?.setHovered(office?.roomId ?? null);
+    if (this.towerHover === office) return;
+    this.towerHover = office;
+    this.callbacks.onTowerHover?.(office);
+  }
+
+  private updateTowerHover() {
+    const point = this.towerPointer;
+    const canvas = this.renderer.domElement;
+    if (
+      this.view !== "tower" ||
+      this.pointerDown ||
+      !point ||
+      document.elementFromPoint(point.x, point.y) !== canvas
+    ) {
+      this.setTowerHover(null);
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      this.setTowerHover(null);
+      return;
+    }
+    this.pointerNdc.set(
+      ((point.x - rect.left) / rect.width) * 2 - 1,
+      -((point.y - rect.top) / rect.height) * 2 + 1
+    );
+    // Raycasting runs before render, so it needs the camera's new world matrix.
+    this.camera.updateMatrixWorld();
+    this.setTowerHover(this.tower?.pick(this.pointerNdc, this.camera) ?? null);
+  }
+
   private onPointerDown(event: PointerEvent) {
     if (event.button !== 0) return;
     this.pointerDown = true;
+    if (this.view === "tower") this.setTowerHover(null);
     this.pointerDragged = false;
     this.pointerStart = { x: event.clientX, y: event.clientY };
     this.updatePointer(event);
@@ -3947,11 +4284,9 @@ export class OfficeEngine {
 
   private onPointerMove(event: PointerEvent) {
     if (this.view === "tower") {
+      this.towerPointer = { x: event.clientX, y: event.clientY };
       if (!this.pointerDown) {
-        this.updatePointer(event);
-        const office = this.tower?.pick(this.pointerNdc, this.camera) ?? null;
-        this.tower?.setHovered(office?.roomId ?? null);
-        this.callbacks.onTowerHover?.(office);
+        this.updateTowerHover();
         return;
       }
       const moveX = event.clientX - this.pointerStart.x;
@@ -4014,14 +4349,36 @@ export class OfficeEngine {
     if (this.cinematic) return;
 
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const seat = this.seatUnderPointer();
+    if (seat) {
+      if (!this.walkToSeat(seat)) this.callbacks.onInvalidTarget();
+      return;
+    }
     const intersections = this.raycaster.intersectObject(
       this.floorPlane,
       false
     );
     if (!intersections.length) return;
     const point = intersections[0].point;
-    const targetRoom = this.roomAtPosition(point.x, point.z);
-    if (!targetRoom) {
+    // Corridors need no named room. Reject restricted targets before snapping,
+    // but let findPath snap furniture and wall clicks to nearby free floor.
+    const insideFloor = this.walkBounds.some(
+      (area) =>
+        point.x >= area.minX &&
+        point.x <= area.maxX &&
+        point.z >= area.minZ &&
+        point.z <= area.maxZ
+    );
+    const insideLockedRoom = this.allRooms.some(
+      (room) =>
+        room.locked &&
+        (room.floorIndex ?? 0) === this.activeFloor &&
+        point.x >= room.bounds.x &&
+        point.x <= room.bounds.x + room.bounds.w &&
+        point.z >= room.bounds.z &&
+        point.z <= room.bounds.z + room.bounds.d
+    );
+    if (!insideFloor || insideLockedRoom) {
       this.callbacks.onInvalidTarget();
       return;
     }
@@ -4037,11 +4394,16 @@ export class OfficeEngine {
     }
     this.path = path;
     this.pathIndex = 0;
+    this.pendingSeat = null;
     this.showMarker(point.x, point.z);
   }
 
   private onWheel(event: WheelEvent) {
     event.preventDefault();
+    if (this.view === "tower") {
+      this.towerPointer = { x: event.clientX, y: event.clientY };
+      this.setTowerHover(null);
+    }
     this.cameraDistance = clamp(
       this.cameraDistance + event.deltaY * 0.008,
       5.5,
@@ -4143,10 +4505,8 @@ export class OfficeEngine {
     if (!hovered || hovered.id !== current.id) {
       return "That spot is outside this room.";
     }
-    const items = this.furnitureItems.filter(
-      (item) =>
-        item.id !== this.editState.movingId &&
-        this.roomAtPosition(item.x, item.z)?.id === current.id
+    const items = roomLayoutItems(this.furnitureItems, current).filter(
+      (item) => item.id !== this.editState.movingId
     );
     return validatePlacement(items, catalogId, x, z, rotation, current);
   }
@@ -4343,16 +4703,20 @@ export class OfficeEngine {
     if (this.view === "tower") {
       this.tower?.update(elapsed);
       this.updateTowerCamera(dt);
+      this.updateTowerHover();
+      this.updateWallOcclusion(dt);
       this.renderer.render(this.scene, this.camera);
       return;
     }
 
     this.updatePlayer(dt, elapsed);
     this.updateAgents(dt, elapsed);
+    this.updateOccupants(dt, elapsed);
     this.updateZoe(elapsed);
     this.updateBubbles();
     this.updateLabels();
     this.updateCamera(dt);
+    this.updateWallOcclusion(dt);
     this.updateMarker();
     this.updateRoomCheck();
     this.updateProximity();
@@ -4388,7 +4752,23 @@ export class OfficeEngine {
     inputZ += this.joystick.y;
 
     const hasInput = Math.abs(inputX) + Math.abs(inputZ) > 0.05;
+    if (
+      this.seated &&
+      (hasInput ||
+        this.path.length ||
+        this.pendingSeat ||
+        this.editState.active ||
+        !this.followSeat())
+    ) {
+      this.seated = null;
+    }
+    if (this.seated) {
+      this.poseSeated(this.playerRig, this.seated, elapsed);
+      this.pushPosition();
+      return;
+    }
     if (hasInput) {
+      this.pendingSeat = null;
       this.path = [];
       const length = Math.hypot(inputX, inputZ) || 1;
       inputX /= length;
@@ -4438,6 +4818,20 @@ export class OfficeEngine {
       this.playerYaw = Math.atan2(this.playerVelocity.x, this.playerVelocity.y);
     }
     this.playerSpeed = speed;
+
+    if (this.pendingSeat && !this.path.length) {
+      const seat = this.pendingSeat;
+      this.pendingSeat = null;
+      const near =
+        Math.hypot(
+          seat.position.x - this.playerPosition.x,
+          seat.position.z - this.playerPosition.z
+        ) < 1.8;
+      if (seat.parent && near) {
+        this.seated = seat;
+        this.playerVelocity.set(0, 0);
+      }
+    }
 
     this.playerRig.group.position.set(
       this.playerPosition.x,
@@ -4497,6 +4891,50 @@ export class OfficeEngine {
     }
   }
 
+  private updateOccupants(dt: number, elapsed: number) {
+    if (!this.isLive) return;
+
+    for (const rig of this.agentRigs.values()) {
+      if (rig.targetX === undefined || rig.targetZ === undefined) {
+        this.animateRig(rig, 0, elapsed);
+        continue;
+      }
+
+      const dx = rig.targetX - rig.group.position.x;
+      const dz = rig.targetZ - rig.group.position.z;
+      const dist = Math.hypot(dx, dz);
+
+      let speed = 0;
+      if (dist > 0.02) {
+        const lerpFactor = Math.min(1, dt * 10);
+        rig.group.position.x += dx * lerpFactor;
+        rig.group.position.z += dz * lerpFactor;
+
+        speed = Math.min(3.5, dist / Math.max(dt, 0.016));
+
+        const moveYaw = Math.atan2(dx, dz);
+        const desiredYaw =
+          dist > 0.08 ? moveYaw : (rig.targetYaw ?? rig.group.rotation.y);
+        const yawDelta =
+          ((desiredYaw - rig.group.rotation.y + Math.PI * 3) % (Math.PI * 2)) -
+          Math.PI;
+        rig.group.rotation.y += yawDelta * Math.min(dt * 12, 1);
+      } else {
+        rig.group.position.x = rig.targetX;
+        rig.group.position.z = rig.targetZ;
+        if (rig.targetYaw !== undefined) {
+          const yawDelta =
+            ((rig.targetYaw - rig.group.rotation.y + Math.PI * 3) %
+              (Math.PI * 2)) -
+            Math.PI;
+          rig.group.rotation.y += yawDelta * Math.min(dt * 12, 1);
+        }
+      }
+
+      this.animateRig(rig, speed, elapsed);
+    }
+  }
+
   private updateZoe(elapsed: number) {
     if (!this.zoeRig) return;
     this.animateRig(this.zoeRig, 0, elapsed);
@@ -4520,6 +4958,7 @@ export class OfficeEngine {
     const rigs = [
       this.playerRig,
       ...this.agents.map((agent) => agent.rig),
+      ...this.agentRigs.values(),
       this.zoeRig,
     ];
     for (const rig of rigs) {
@@ -4636,6 +5075,58 @@ export class OfficeEngine {
     this.camera.lookAt(this.cameraTarget);
   }
 
+  private updateWallOcclusion(dt: number) {
+    const following =
+      this.view === "floor" && !this.cinematic && this.playerRig;
+    const targets: THREE.Vector3[] = [];
+    if (following) {
+      // Sample the body as well as the head: a low partition can hide the legs
+      // without crossing the camera's look-at point.
+      for (const height of [0.35, 1.1, 1.75]) {
+        for (const side of [-0.28, 0.28]) {
+          targets.push(
+            new THREE.Vector3(
+              this.playerPosition.x + Math.cos(this.cameraYaw) * side,
+              height,
+              this.playerPosition.z - Math.sin(this.cameraYaw) * side
+            )
+          );
+        }
+      }
+    }
+    const rays = targets.map((target) => ({
+      ray: new THREE.Ray(
+        this.camera.position,
+        target.clone().sub(this.camera.position).normalize()
+      ),
+      distanceSquared: target.distanceToSquared(this.camera.position),
+    }));
+    const hit = new THREE.Vector3();
+    for (const wall of this.occlusionWalls) {
+      const obscures = rays.some(({ ray, distanceSquared }) => {
+        if (wall.bounds.containsPoint(this.camera.position)) return true;
+        return (
+          ray.intersectBox(wall.bounds, hit) !== null &&
+          hit.distanceToSquared(this.camera.position) < distanceSquared
+        );
+      });
+      const material = wall.mesh.material;
+      const opacity = THREE.MathUtils.damp(
+        material.opacity,
+        obscures ? 0.35 : 1,
+        18,
+        dt
+      );
+      const fading = obscures || opacity < 0.995;
+      if (material.transparent !== fading) {
+        material.transparent = fading;
+        material.needsUpdate = true;
+      }
+      material.opacity = fading ? opacity : 1;
+      material.depthWrite = fading ? false : wall.depthWrite;
+    }
+  }
+
   private updateMarker() {
     if (this.marker && performance.now() > this.markerUntil) {
       this.buildingGroup.remove(this.marker);
@@ -4653,7 +5144,7 @@ export class OfficeEngine {
       this.playerPosition.x,
       this.playerPosition.z
     );
-    const nextRoom = room ?? null;
+    const nextRoom = room ?? this.getFloorCommonRoom(this.activeFloor);
     if (nextRoom?.id !== this.currentRoom?.id) {
       this.currentRoom = nextRoom;
       if (nextRoom?.kind === "focus") {

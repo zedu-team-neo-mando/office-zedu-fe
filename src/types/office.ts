@@ -196,6 +196,17 @@ export interface OfficeSource {
   askZoe(question: string, context: OfficeZoeContext): Promise<string>;
   enterRoom(roomId: string): Promise<void>;
   leaveRoom(roomId: string): Promise<void>;
+  /**
+   * Publishes the local avatar's pose to the room it stands in. The HTTP
+   * status comes back untouched, so the caller can answer `409 not_in_room`
+   * or a `429` without another layer of toasts.
+   */
+  sendPosition(
+    roomId: string,
+    x: number,
+    z: number,
+    yaw: number
+  ): Promise<number>;
   /** Who is standing in a room right now, for the first frame of presence. */
   fetchOccupants(roomId: string): Promise<OfficeOccupant[]>;
   subscribePresence(
