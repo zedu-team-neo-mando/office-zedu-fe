@@ -1849,13 +1849,13 @@ export class OfficeEngine {
         const ceilingLamp = this.roomCeilingLamps.get(room.id);
         if (ceilingLamp) {
           if (!status || status === "away") {
-            ceilingLamp.color.setHex(0xc4bcae);
+            ceilingLamp.color.setHex(0x5a544a);
             ceilingLamp.emissive.setHex(0xcca666);
-            ceilingLamp.emissiveIntensity = 0.25;
+            ceilingLamp.emissiveIntensity = 0.08;
           } else if (status === "idle") {
-            ceilingLamp.color.setHex(0xe8dcbe);
+            ceilingLamp.color.setHex(0xd8ceb5);
             ceilingLamp.emissive.setHex(0xd4a055);
-            ceilingLamp.emissiveIntensity = 0.85;
+            ceilingLamp.emissiveIntensity = 0.7;
           } else {
             ceilingLamp.color.setHex(PALETTE.lightWarm);
             ceilingLamp.emissive.setHex(PALETTE.lightWarm);

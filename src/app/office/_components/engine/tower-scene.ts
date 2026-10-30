@@ -1139,13 +1139,13 @@ export class TowerScene {
   ) {
     if (!isTowerRoom(office)) {
       return {
-        ceilingColor: 0xc4bcae,
+        ceilingColor: 0x5a544a,
         ceilingEmissive: 0xcca666,
-        ceilingIntensity: 0.25,
-        wallColor: baseWallColor.clone().multiplyScalar(0.88),
+        ceilingIntensity: 0.08,
+        wallColor: baseWallColor.clone().multiplyScalar(0.48),
         wallEmissive: PALETTE.glow,
-        wallIntensity: 0.05 * warmth,
-        floorColor: 0xa27c5b,
+        wallIntensity: 0.04 * warmth,
+        floorColor: 0x5c4633,
       };
     }
 
@@ -1163,29 +1163,29 @@ export class TowerScene {
     }
 
     if (!office.present || office.status === "away") {
-      // Away or unoccupied personal office: faint ambient night level (~15-20%)
+      // Away or unoccupied personal office: clearly dimmed ambient state
       // preserving architectural wall, floor and furniture geometry without black voids.
       return {
-        ceilingColor: 0xc4bcae,
+        ceilingColor: 0x5a544a,
         ceilingEmissive: 0xcca666,
-        ceilingIntensity: 0.25,
-        wallColor: baseWallColor.clone().multiplyScalar(0.88),
+        ceilingIntensity: 0.08,
+        wallColor: baseWallColor.clone().multiplyScalar(0.48),
         wallEmissive: PALETTE.glow,
-        wallIntensity: 0.05 * warmth,
-        floorColor: 0xa27c5b,
+        wallIntensity: 0.04 * warmth,
+        floorColor: 0x5c4633,
       };
     }
 
     if (office.status === "idle") {
       // Inactive / idle occupant (> 2 min no input): soft warm dim (~50-60%)
       return {
-        ceilingColor: 0xe8dcbe,
+        ceilingColor: 0xd8ceb5,
         ceilingEmissive: 0xd4a055,
-        ceilingIntensity: 0.85,
-        wallColor: baseWallColor.clone().multiplyScalar(0.94),
+        ceilingIntensity: 0.7,
+        wallColor: baseWallColor.clone().multiplyScalar(0.72),
         wallEmissive: PALETTE.glow,
-        wallIntensity: 0.16 * warmth,
-        floorColor: 0xad8561,
+        wallIntensity: 0.15 * warmth,
+        floorColor: 0x8a684b,
       };
     }
 
