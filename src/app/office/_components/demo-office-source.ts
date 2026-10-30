@@ -233,6 +233,56 @@ function getDemoChannel(): BroadcastChannel | null {
 
 const demoRoomOccupants = new Map<string, Map<string, OfficeOccupant>>();
 
+function getDemoIdentity() {
+  if (typeof window === "undefined") {
+    return { id: "demo_player", name: "Colleague", tint: "#8b5cf6" };
+  }
+  const w = window as any;
+  if (w.__officeTabIdentity) {
+    return w.__officeTabIdentity;
+  }
+  const id = `demo_${Math.random().toString(36).slice(2, 8)}`;
+  const names = [
+    "Alex",
+    "Jordan",
+    "Taylor",
+    "Casey",
+    "Morgan",
+    "Sam",
+    "Kai",
+    "Riley",
+    "Quinn",
+    "Avery",
+  ];
+  const name = names[Math.floor(Math.random() * names.length)];
+  const tints = [
+    "#8b5cf6",
+    "#3b82f6",
+    "#10b981",
+    "#f59e0b",
+    "#ec4899",
+    "#06b6d4",
+  ];
+  const tint = tints[Math.floor(Math.random() * tints.length)];
+  const identity = { id, name, tint };
+  w.__officeTabIdentity = identity;
+  try {
+    sessionStorage.setItem("office_session_user_id", id);
+    sessionStorage.setItem("office_session_user_name", name);
+    sessionStorage.setItem("office_session_user_tint", tint);
+  } catch {
+    // Ignore storage issues in restricted environments
+  }
+  return identity;
+}
+
+let latestLocalPose: {
+  roomId: string;
+  x: number;
+  z: number;
+  yaw: number;
+} | null = null;
+
 /** The demo lives entirely in the browser: seeded data plus localStorage. */
 export const demoSource: OfficeSource = {
   mode: "demo",
@@ -350,22 +400,26 @@ export const demoSource: OfficeSource = {
     const channel = getDemoChannel();
     if (!channel || typeof window === "undefined") return;
 
-    const id =
-      sessionStorage.getItem("office_session_user_id") || "demo_player";
-    const name =
-      sessionStorage.getItem("office_session_user_name") || "Colleague";
-    const tint =
-      sessionStorage.getItem("office_session_user_tint") || "#8b5cf6";
+    const identity = getDemoIdentity();
+    const spawnPos =
+      latestLocalPose && latestLocalPose.roomId === roomId
+        ? { x: latestLocalPose.x, z: latestLocalPose.z }
+        : { x: 8.5, z: 9.4 };
 
     const occupant: OfficeOccupant = {
-      userId: id,
-      displayName: name,
-      username: name.toLowerCase(),
-      avatar: { tint, body: "b", outfit: "smart", accessory: "glasses" },
+      userId: identity.id,
+      displayName: identity.name,
+      username: identity.name.toLowerCase(),
+      avatar: {
+        tint: identity.tint,
+        body: "b",
+        outfit: "smart",
+        accessory: "glasses",
+      },
       roomId,
       status: "online",
-      position: { x: 8.5, y: 0, z: 9.4 },
-      rotation: Math.PI,
+      position: { x: spawnPos.x, y: 0, z: spawnPos.z },
+      rotation: latestLocalPose?.yaw ?? Math.PI,
       updatedAt: new Date().toISOString(),
     };
 
@@ -380,12 +434,11 @@ export const demoSource: OfficeSource = {
     const channel = getDemoChannel();
     if (!channel || typeof window === "undefined") return;
 
-    const id =
-      sessionStorage.getItem("office_session_user_id") || "demo_player";
+    const identity = getDemoIdentity();
     channel.postMessage({
       type: "leave",
       roomId,
-      userId: id,
+      userId: identity.id,
     });
   },
 
@@ -393,18 +446,19 @@ export const demoSource: OfficeSource = {
     const channel = getDemoChannel();
     if (!channel || typeof window === "undefined") return 200;
 
-    const id =
-      sessionStorage.getItem("office_session_user_id") || "demo_player";
-    const name =
-      sessionStorage.getItem("office_session_user_name") || "Colleague";
-    const tint =
-      sessionStorage.getItem("office_session_user_tint") || "#8b5cf6";
+    const identity = getDemoIdentity();
+    latestLocalPose = { roomId, x, z, yaw };
 
     const occupant: OfficeOccupant = {
-      userId: id,
-      displayName: name,
-      username: name.toLowerCase(),
-      avatar: { tint, body: "b", outfit: "smart", accessory: "glasses" },
+      userId: identity.id,
+      displayName: identity.name,
+      username: identity.name.toLowerCase(),
+      avatar: {
+        tint: identity.tint,
+        body: "b",
+        outfit: "smart",
+        accessory: "glasses",
+      },
       roomId,
       status: "online",
       position: { x, y: 0, z },
@@ -423,13 +477,8 @@ export const demoSource: OfficeSource = {
   async fetchOccupants(roomId: string): Promise<OfficeOccupant[]> {
     const roomMap = demoRoomOccupants.get(roomId);
     if (!roomMap) return [];
-    const currentTabId =
-      typeof window !== "undefined"
-        ? sessionStorage.getItem("office_session_user_id")
-        : null;
-    return [...roomMap.values()].filter(
-      (occ) => !currentTabId || occ.userId !== currentTabId
-    );
+    const identity = getDemoIdentity();
+    return [...roomMap.values()].filter((occ) => occ.userId !== identity.id);
   },
 
   subscribePresence(
@@ -450,11 +499,11 @@ export const demoSource: OfficeSource = {
       demoRoomOccupants.set(roomId, roomMap);
     }
 
-    const currentTabId = sessionStorage.getItem("office_session_user_id");
+    const identity = getDemoIdentity();
 
     const emit = () => {
       const others = [...(roomMap?.values() ?? [])].filter(
-        (occ) => !currentTabId || occ.userId !== currentTabId
+        (occ) => occ.userId !== identity.id
       );
       onPresence(others);
     };
@@ -464,10 +513,7 @@ export const demoSource: OfficeSource = {
       if (!data || data.roomId !== roomId) return;
 
       if (data.type === "join" || data.type === "position") {
-        if (
-          data.occupant &&
-          (!currentTabId || data.occupant.userId !== currentTabId)
-        ) {
+        if (data.occupant && data.occupant.userId !== identity.id) {
           roomMap?.set(data.occupant.userId, data.occupant);
           emit();
         }
@@ -477,31 +523,39 @@ export const demoSource: OfficeSource = {
           emit();
         }
       } else if (data.type === "query") {
-        const id = sessionStorage.getItem("office_session_user_id");
-        const name = sessionStorage.getItem("office_session_user_name");
-        const tint = sessionStorage.getItem("office_session_user_tint");
-        if (id && name) {
-          channel.postMessage({
-            type: "join",
-            roomId,
-            occupant: {
-              userId: id,
-              displayName: name,
-              username: name.toLowerCase(),
-              avatar: {
-                tint: tint || "#8b5cf6",
-                body: "b",
-                outfit: "smart",
-                accessory: "glasses",
-              },
-              roomId,
-              status: "online",
-              position: { x: 8.5, y: 0, z: 9.4 },
-              rotation: Math.PI,
-              updatedAt: new Date().toISOString(),
+        const curX =
+          latestLocalPose && latestLocalPose.roomId === roomId
+            ? latestLocalPose.x
+            : 8.5;
+        const curZ =
+          latestLocalPose && latestLocalPose.roomId === roomId
+            ? latestLocalPose.z
+            : 9.4;
+        const curYaw =
+          latestLocalPose && latestLocalPose.roomId === roomId
+            ? latestLocalPose.yaw
+            : Math.PI;
+
+        channel.postMessage({
+          type: "join",
+          roomId,
+          occupant: {
+            userId: identity.id,
+            displayName: identity.name,
+            username: identity.name.toLowerCase(),
+            avatar: {
+              tint: identity.tint,
+              body: "b",
+              outfit: "smart",
+              accessory: "glasses",
             },
-          });
-        }
+            roomId,
+            status: "online",
+            position: { x: curX, y: 0, z: curZ },
+            rotation: curYaw,
+            updatedAt: new Date().toISOString(),
+          },
+        });
       }
     };
 

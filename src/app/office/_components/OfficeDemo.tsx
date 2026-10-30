@@ -223,42 +223,46 @@ export default function OfficeDemo({
     if (typeof window === "undefined") {
       return { id: "demo_player", name: "Colleague", tint: "#8b5cf6" };
     }
+    const w = window as any;
+    if (w.__officeTabIdentity) {
+      return w.__officeTabIdentity;
+    }
     const sessionKey = "office_session_user_id";
     const nameKey = "office_session_user_name";
     const tintKey = "office_session_user_tint";
-    let id = sessionStorage.getItem(sessionKey);
-    let name = sessionStorage.getItem(nameKey);
-    let tint = sessionStorage.getItem(tintKey);
-    if (!id) {
-      id = `demo_${Math.random().toString(36).slice(2, 8)}`;
+    const id = `demo_${Math.random().toString(36).slice(2, 8)}`;
+    const names = [
+      "Alex",
+      "Jordan",
+      "Taylor",
+      "Casey",
+      "Morgan",
+      "Sam",
+      "Kai",
+      "Riley",
+      "Quinn",
+      "Avery",
+    ];
+    const name = names[Math.floor(Math.random() * names.length)];
+    const tints = [
+      "#8b5cf6",
+      "#3b82f6",
+      "#10b981",
+      "#f59e0b",
+      "#ec4899",
+      "#06b6d4",
+    ];
+    const tint = tints[Math.floor(Math.random() * tints.length)];
+    const identity = { id, name, tint };
+    w.__officeTabIdentity = identity;
+    try {
       sessionStorage.setItem(sessionKey, id);
-    }
-    if (!name) {
-      const names = [
-        "Alex",
-        "Jordan",
-        "Taylor",
-        "Casey",
-        "Morgan",
-        "Sam",
-        "Kai",
-      ];
-      name = names[Math.floor(Math.random() * names.length)];
       sessionStorage.setItem(nameKey, name);
-    }
-    if (!tint) {
-      const tints = [
-        "#8b5cf6",
-        "#3b82f6",
-        "#10b981",
-        "#f59e0b",
-        "#ec4899",
-        "#06b6d4",
-      ];
-      tint = tints[Math.floor(Math.random() * tints.length)];
       sessionStorage.setItem(tintKey, tint);
+    } catch {
+      // Ignore storage errors in restricted contexts
     }
-    return { id, name, tint };
+    return identity;
   }, []);
 
   const selfId = self?.id ?? demoIdentity.id;
@@ -292,17 +296,31 @@ export default function OfficeDemo({
     () => source.initialLayouts
   );
 
+  const commonFloorRooms = useMemo(
+    () => rooms.filter((room) => (room.floorIndex ?? 0) === 0),
+    [rooms]
+  );
   const initialRoom = useMemo(
     () =>
+      commonFloorRooms.find((room) => room.kind === "reception") ??
+      commonFloorRooms.find((room) => room.id === "reception") ??
+      commonFloorRooms.find((room) => room.kind === "lobby") ??
+      commonFloorRooms.find((room) => room.kind !== "personal") ??
+      commonFloorRooms[0] ??
       rooms.find((room) => room.kind === "reception") ??
-      rooms.find((room) => room.id === "reception") ??
       rooms[0] ??
       null,
-    [rooms]
+    [commonFloorRooms, rooms]
   );
   const [roomId, setRoomId] = useState<string | null>(
     () => initialRoom?.id ?? "reception"
   );
+
+  useEffect(() => {
+    if (initialRoom?.id && (!roomId || roomId === "reception")) {
+      setRoomId(initialRoom.id);
+    }
+  }, [initialRoom?.id, roomId]);
   const [player, setPlayer] = useState(() => ({
     x: initialRoom?.spawn.x ?? 8.5,
     z: initialRoom?.spawn.z ?? 9.4,
@@ -642,14 +660,18 @@ export default function OfficeDemo({
     return () => window.clearInterval(timer);
   }, [phase, ready]);
 
-  // The live office has no entry screen, but it still opens on the tower: the
-  // building is the front door for both routes.
+  // Both demo and live office start on the floor in reception so all
+  // players land in the same room together.
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !ready) return;
     if (openedInitialTowerRef.current) return;
     openedInitialTowerRef.current = true;
-    openTower();
-  }, [source.mode, phase, ready, openTower]);
+    engineRef.current?.setView("floor");
+    setTowerOpen(false);
+    if (initialRoom) {
+      engineRef.current?.teleportToRoom(initialRoom.id, true);
+    }
+  }, [source.mode, phase, ready, initialRoom]);
 
   useEffect(() => {
     engineRef.current?.setRooms(rooms);
@@ -1865,8 +1887,11 @@ export default function OfficeDemo({
     if (!ready) return;
     setPhase("office");
     engineRef.current?.setCinematic(false);
-    // The tower is the front door: enter the building by choosing a storey.
-    openTower();
+    engineRef.current?.setView("floor");
+    setTowerOpen(false);
+    if (initialRoom) {
+      navigateToRoom(initialRoom.id);
+    }
   }
 
   /**

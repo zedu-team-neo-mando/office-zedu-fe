@@ -591,10 +591,24 @@ export class OfficeEngine {
     this.playerVelocity.set(0, 0);
     this.cameraTarget.set(room.spawn.x, 1.25, room.spawn.z);
     this.playerRig?.group.position.set(room.spawn.x, 0, room.spawn.z);
+    this.currentRoom = room;
+    this.callbacks.onRoomChange(room);
   }
 
   private roomsOnFloor(index: number): OfficeRoom[] {
     return this.allRooms.filter((room) => (room.floorIndex ?? 0) === index);
+  }
+
+  private getFloorCommonRoom(index: number): OfficeRoom | null {
+    const floorRooms = this.roomsOnFloor(index);
+    return (
+      floorRooms.find((room) => room.kind === "reception") ??
+      floorRooms.find((room) => room.id === "reception") ??
+      floorRooms.find((room) => room.kind === "lobby") ??
+      floorRooms.find((room) => room.kind === "area") ??
+      floorRooms[0] ??
+      null
+    );
   }
 
   /** Give the tower the floor directory and the people who sit in it. */
@@ -923,6 +937,9 @@ export class OfficeEngine {
 
     this.resize();
     this.callbacks.onReady();
+    if (this.currentRoom) {
+      this.callbacks.onRoomChange(this.currentRoom);
+    }
     this.loop();
   }
 
@@ -5053,7 +5070,7 @@ export class OfficeEngine {
       this.playerPosition.x,
       this.playerPosition.z
     );
-    const nextRoom = room ?? null;
+    const nextRoom = room ?? this.getFloorCommonRoom(this.activeFloor);
     if (nextRoom?.id !== this.currentRoom?.id) {
       this.currentRoom = nextRoom;
       if (nextRoom?.kind === "focus") {
