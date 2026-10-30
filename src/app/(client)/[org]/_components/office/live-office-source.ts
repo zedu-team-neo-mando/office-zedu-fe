@@ -90,6 +90,41 @@ function unwrap<T>(response: any, fallback: string): T {
   return response?.data?.data as T;
 }
 
+function normalizeOccupant(raw: any, roomId: string): OfficeOccupant | null {
+  if (!raw || typeof raw !== "object") return null;
+  const userId = String(raw.userId || raw.user_id || raw.id || "");
+  if (!userId) return null;
+
+  const rawPos = raw.position || raw.pos || {};
+  const x = Number(rawPos.x ?? 0);
+  const z = Number(rawPos.z ?? rawPos.y ?? 0);
+  const y = Number(rawPos.z !== undefined ? (rawPos.y ?? 0) : 0);
+
+  const rawAvatar = raw.avatar || raw.avatar_config || {};
+
+  return {
+    userId,
+    displayName:
+      raw.displayName ||
+      raw.display_name ||
+      raw.username ||
+      raw.name ||
+      "Colleague",
+    username: raw.username || raw.user_name || "",
+    avatar: {
+      tint: rawAvatar.tint || raw.tint || "#8b5cf6",
+      body: rawAvatar.body || "b",
+      outfit: rawAvatar.outfit || "smart",
+      accessory: rawAvatar.accessory || "none",
+    },
+    roomId: raw.roomId || raw.room_id || roomId,
+    status: raw.status || "online",
+    position: { x, y, z },
+    rotation: Number(raw.rotation ?? raw.yaw ?? 0),
+    updatedAt: raw.updatedAt || raw.updated_at || new Date().toISOString(),
+  };
+}
+
 /**
  * Whether the incoming record is older than the one already held. A record
  * whose timestamp cannot be read is never considered older, so a snapshot can
@@ -246,7 +281,10 @@ const AREA_FALLBACK_ROOM: OfficeRoom = {
  * of truth. The static ROOMS slots are only used for description and fallback
  * capacity when the API doesn't provide one.
  */
-function buildRooms(apiRooms: OfficeApiRoom[]): OfficeRoom[] {
+function buildRooms(
+  apiRooms: OfficeApiRoom[],
+  dmRoomMap: Record<string, string>
+): OfficeRoom[] {
   const slots: Record<string, OfficeRoom[]> = {
     channel: ROOMS.filter((room) => room.kind === "channel"),
     personal: ROOMS.filter((room) => room.kind === "personal"),
@@ -305,7 +343,9 @@ function buildRooms(apiRooms: OfficeApiRoom[]): OfficeRoom[] {
       locked: Boolean(room.isLocked),
       // Only a channel or a DM-backed private office has a conversation.
       // Shared spaces keep their 2D description instead of an empty chat.
-      chat: room.kind === "channel" || room.kind === "personal",
+      chat:
+        room.kind === "channel" ||
+        (room.kind === "personal" && Boolean(dmRoomMap[room.id])),
       description: template.description,
       ownerId: room.refId,
       floorIndex: room.floorIndex ?? 0,
@@ -355,10 +395,21 @@ export class LiveOfficeSource implements OfficeSource {
   private dmOfficeMap: Record<string, string> = {};
   private dmRoomMap: Record<string, string> = {};
   private floorByRoom: Record<string, number> = {};
+  private selfName = "Colleague";
+  /** The room presence subscription that is open right now, if any. */
+  private presenceSubscription: any = null;
+  private presenceRoomId: string | null = null;
+  private lastPose: {
+    roomId: string;
+    x: number;
+    z: number;
+    yaw: number;
+  } | null = null;
 
-  async init(orgId: string, userId: string) {
+  async init(orgId: string, userId: string, selfName?: string) {
     this.orgId = orgId;
     this.userId = userId;
+    if (selfName) this.selfName = selfName;
 
     const response = await GetRequest("/office/bootstrap");
     const status = response?.status ?? response?.response?.status;
@@ -382,7 +433,7 @@ export class LiveOfficeSource implements OfficeSource {
       ])
     );
 
-    this.rooms = buildRooms(data.rooms ?? []);
+    this.rooms = buildRooms(data.rooms ?? [], this.dmRoomMap);
     this.floors = data.floors ?? [];
     // The member roster is what makes the tower a directory of people rather
     // than a row of anonymous offices. A bootstrap from an older backend has
@@ -508,7 +559,11 @@ export class LiveOfficeSource implements OfficeSource {
     text: string
   ): Promise<OfficeChatMessage[]> {
     const channelId = this.channelIdForRoom(roomId);
-    if (!channelId) return [];
+    if (!channelId) {
+      throw new Error(
+        "This office has no linked conversation. Open a DM in Zedu, then reload Office."
+      );
+    }
 
     // The office posts through the same endpoints the 2D chat uses. A new
     // top-level message is a new thread; replying to an existing thread is a
@@ -532,7 +587,19 @@ export class LiveOfficeSource implements OfficeSource {
       );
     }
 
-    return [];
+    return [
+      {
+        id: threadId,
+        roomId,
+        userId: this.userId,
+        name:
+          this.members.find((member) => member.userId === this.userId)
+            ?.displayName ?? "You",
+        text,
+        at: Date.now(),
+        self: true,
+      },
+    ];
   }
 
   async askZoe(question: string, context: OfficeZoeContext) {
@@ -577,13 +644,21 @@ export class LiveOfficeSource implements OfficeSource {
   }
 
   async enterRoom(roomId: string) {
-    unwrap(
-      await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/enter`, {}),
-      "The room could not be entered."
-    );
+    this.publishOverSocket(roomId, "join");
+    try {
+      unwrap(
+        await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/enter`, {}),
+        "The room could not be entered."
+      );
+    } catch {
+      // Presence also travels over the room's realtime channel, so a refused
+      // entry must not stop this avatar from being published to the room.
+    }
+    this.publishOverSocket(roomId, "join");
   }
 
   async leaveRoom(roomId: string) {
+    this.publishOverSocket(roomId, "leave");
     unwrap(
       await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/leave`, {}),
       "The room could not be left."
@@ -596,6 +671,12 @@ export class LiveOfficeSource implements OfficeSource {
     z: number,
     yaw: number
   ): Promise<number> {
+    this.lastPose = { roomId, x, z, yaw };
+    // Everyone subscribed to the room hears the move straight away over the
+    // realtime channel; the REST call below only keeps the server's snapshot
+    // fresh for people who arrive later.
+    const published = this.publishOverSocket(roomId, "update");
+
     // Movement goes out several times a second, so it uses the silent request
     // helper: a refused attempt (409, 429 or a network blip) must not raise a
     // toast, it only hands its status back to the caller to back off with.
@@ -604,8 +685,50 @@ export class LiveOfficeSource implements OfficeSource {
       { position: { x, y: 0, z }, rotation: yaw }
     );
     const status = response?.status ?? response?.response?.status;
+    if (published) return 200;
     // No answer at all: 0 tells the caller to back off and try again later.
     return typeof status === "number" ? status : 0;
+  }
+
+  /**
+   * Publishes this user's presence on the room channel the client is
+   * subscribed to. Returns false when that room's subscription is not live.
+   */
+  private publishOverSocket(
+    roomId: string,
+    type: "join" | "update" | "leave"
+  ): boolean {
+    const subscription = this.presenceSubscription;
+    if (
+      !subscription ||
+      this.presenceRoomId !== roomId ||
+      subscription.state !== "subscribed"
+    ) {
+      return false;
+    }
+    const pose = this.lastPose?.roomId === roomId ? this.lastPose : null;
+    const spawn = this.rooms.find((room) => room.id === roomId)?.spawn;
+    const x = pose?.x ?? spawn?.x ?? 8.5;
+    const z = pose?.z ?? spawn?.z ?? 9.4;
+    subscription
+      .publish({
+        type,
+        presence: {
+          userId: this.userId,
+          roomId,
+          displayName: this.selfName,
+          username: this.selfName,
+          avatar: this.initialAvatar,
+          status: "online",
+          position: { x, y: 0, z },
+          rotation: pose?.yaw ?? Math.PI,
+          updatedAt: new Date().toISOString(),
+        },
+      })
+      .catch(() => {
+        // A dropped frame is replaced by the next one a moment later.
+      });
+    return true;
   }
 
   async fetchOccupants(roomId: string): Promise<OfficeOccupant[]> {
@@ -615,12 +738,14 @@ export class LiveOfficeSource implements OfficeSource {
       `/office/rooms/${encodeRoomId(roomId)}/occupants`
     );
 
-    return (
-      unwrap<OfficeOccupant[] | undefined>(
-        response,
-        "The room could not be read."
-      ) ?? []
+    const data = unwrap<any[] | { occupants?: any[] } | undefined>(
+      response,
+      "The room could not be read."
     );
+    const list = Array.isArray(data) ? data : (data?.occupants ?? []);
+    return list
+      .map((item) => normalizeOccupant(item, roomId))
+      .filter((occ): occ is OfficeOccupant => Boolean(occ));
   }
 
   subscribePresence(
@@ -640,6 +765,8 @@ export class LiveOfficeSource implements OfficeSource {
     const subscription = prepareChannelSubscription(client, channel, {
       getToken: () => getSubscriptionToken(channel),
     });
+    this.presenceSubscription = subscription;
+    this.presenceRoomId = roomId;
 
     let cancelled = false;
     /**
@@ -693,11 +820,16 @@ export class LiveOfficeSource implements OfficeSource {
 
           // The snapshot and the stream are folded into a new map that is
           // swapped in one step, so nobody is missing while it is rebuilt.
-          const next = new Map<string, OfficeOccupant>();
+          const next = new Map<string, OfficeOccupant>(roster);
+          for (const leftId of ticket.left) {
+            next.delete(leftId);
+          }
           for (const occupant of occupants) {
             // A departure the stream already carried is newer than this
             // snapshot, so that person is not brought back from it.
             if (ticket.left.has(occupant.userId)) continue;
+            const held = next.get(occupant.userId);
+            if (held && isOlderOccupant(occupant, held)) continue;
             next.set(occupant.userId, occupant);
           }
           for (const [userId, occupant] of ticket.upserts) {
@@ -715,11 +847,28 @@ export class LiveOfficeSource implements OfficeSource {
     };
 
     const onPublication = (ctx: any) => {
-      const presence = ctx?.data?.presence as OfficeOccupant | undefined;
-      const eventType = ctx?.data?.type as string | undefined;
+      const data = ctx?.data;
+      if (!data) return;
+
+      const eventType = data?.type || data?.event;
+      if (eventType === "query") {
+        if (!data?.senderId || data.senderId !== this.userId) {
+          this.publishOverSocket(roomId, "update");
+        }
+        return;
+      }
+
+      const rawPresence =
+        data?.presence ||
+        data?.occupant ||
+        data?.data ||
+        (data?.userId || data?.user_id ? data : undefined);
+      if (!rawPresence) return;
+
+      const presence = normalizeOccupant(rawPresence, roomId);
       if (!presence) return;
 
-      if (eventType === "leave") {
+      if (eventType === "leave" || data?.action === "leave") {
         roster.delete(presence.userId);
         inFlight?.upserts.delete(presence.userId);
         inFlight?.left.add(presence.userId);
@@ -728,6 +877,11 @@ export class LiveOfficeSource implements OfficeSource {
         // Only a record that actually took hold has to survive the snapshot.
         if (apply(roster, presence))
           inFlight?.upserts.set(presence.userId, presence);
+        // Whenever a peer announces a join (e.g. after refreshing), reply with
+        // an update so they see us immediately without us having to move.
+        if (eventType === "join" && presence.userId !== this.userId) {
+          this.publishOverSocket(roomId, "update");
+        }
       }
 
       // Emit the complete roster so the UI never has stale entries.
@@ -739,6 +893,10 @@ export class LiveOfficeSource implements OfficeSource {
       // read the room again: it holds everyone the stream did not carry.
       onState?.("live");
       resync();
+      this.publishOverSocket(roomId, "join");
+      subscription
+        .publish({ type: "query", roomId, senderId: this.userId })
+        .catch(() => {});
     };
     const onUnsubscribed = () => onState?.("connecting");
 
@@ -753,6 +911,12 @@ export class LiveOfficeSource implements OfficeSource {
     return () => {
       cancelled = true;
       syncGeneration++;
+      // Tell the room this avatar is gone before the channel is released.
+      this.publishOverSocket(roomId, "leave");
+      if (this.presenceSubscription === subscription) {
+        this.presenceSubscription = null;
+        this.presenceRoomId = null;
+      }
       subscription.off("publication", onPublication);
       subscription.off("subscribed", onSubscribed);
       subscription.off("unsubscribed", onUnsubscribed);
@@ -805,7 +969,7 @@ export class LiveOfficeSource implements OfficeSource {
     const onPublication = (ctx: any) => {
       if (ctx?.data?.type !== "message") return;
       const message = toOfficeMessage(roomId, ctx.data, this.userId);
-      // sendChat already drew our own message, so its echo would double it.
+      // The confirmed send result draws our own message; ignore its echo.
       if (!message || message.self) return;
       onMessage(message);
     };

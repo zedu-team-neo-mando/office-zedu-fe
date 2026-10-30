@@ -218,8 +218,55 @@ export default function OfficeDemo({
     for (const room of rooms) map[room.id] = room;
     return map;
   }, [rooms]);
-  const selfId = self?.id ?? DEMO_USER_ID;
-  const selfName = self?.name ?? "Ada Obi";
+
+  const demoIdentity = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { id: "demo_player", name: "Colleague", tint: "#8b5cf6" };
+    }
+    const w = window as any;
+    if (w.__officeTabIdentity) {
+      return w.__officeTabIdentity;
+    }
+    const sessionKey = "office_session_user_id";
+    const nameKey = "office_session_user_name";
+    const tintKey = "office_session_user_tint";
+    const id = `demo_${Math.random().toString(36).slice(2, 8)}`;
+    const names = [
+      "Alex",
+      "Jordan",
+      "Taylor",
+      "Casey",
+      "Morgan",
+      "Sam",
+      "Kai",
+      "Riley",
+      "Quinn",
+      "Avery",
+    ];
+    const name = names[Math.floor(Math.random() * names.length)];
+    const tints = [
+      "#8b5cf6",
+      "#3b82f6",
+      "#10b981",
+      "#f59e0b",
+      "#ec4899",
+      "#06b6d4",
+    ];
+    const tint = tints[Math.floor(Math.random() * tints.length)];
+    const identity = { id, name, tint };
+    w.__officeTabIdentity = identity;
+    try {
+      sessionStorage.setItem(sessionKey, id);
+      sessionStorage.setItem(nameKey, name);
+      sessionStorage.setItem(tintKey, tint);
+    } catch {
+      // Ignore storage errors in restricted contexts
+    }
+    return identity;
+  }, []);
+
+  const selfId = self?.id ?? demoIdentity.id;
+  const selfName = self?.name ?? demoIdentity.name;
   const onboardingKey = `office-onboarding-v2-${source.mode}`;
   // The live rooms come from the server, so hit testing has to use them and
   // not the demo floor plan compiled into office-data. Only the storey the
@@ -237,18 +284,48 @@ export default function OfficeDemo({
   const [ready, setReady] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
 
-  const [avatar, setAvatar] = useState<AvatarConfig>(source.initialAvatar);
-  const [avatarDraft, setAvatarDraft] = useState<AvatarConfig>(
-    source.initialAvatar
-  );
+  const [avatar, setAvatar] = useState<AvatarConfig>(() => ({
+    ...source.initialAvatar,
+    tint: self ? source.initialAvatar.tint : demoIdentity.tint,
+  }));
+  const [avatarDraft, setAvatarDraft] = useState<AvatarConfig>(() => ({
+    ...source.initialAvatar,
+    tint: self ? source.initialAvatar.tint : demoIdentity.tint,
+  }));
   const [layouts, setLayouts] = useState<Record<string, FurnitureItem[]>>(
     () => source.initialLayouts
   );
-  const [roomId, setRoomId] = useState<string | null>(
-    () =>
-      rooms.find((room) => room.id === "reception")?.id ?? rooms[0]?.id ?? null
+
+  const commonFloorRooms = useMemo(
+    () => rooms.filter((room) => (room.floorIndex ?? 0) === 0),
+    [rooms]
   );
-  const [player, setPlayer] = useState({ x: 8.5, z: 9.4, yaw: Math.PI });
+  const initialRoom = useMemo(
+    () =>
+      commonFloorRooms.find((room) => room.kind === "reception") ??
+      commonFloorRooms.find((room) => room.id === "reception") ??
+      commonFloorRooms.find((room) => room.kind === "lobby") ??
+      commonFloorRooms.find((room) => room.kind !== "personal") ??
+      commonFloorRooms[0] ??
+      rooms.find((room) => room.kind === "reception") ??
+      rooms[0] ??
+      null,
+    [commonFloorRooms, rooms]
+  );
+  const [roomId, setRoomId] = useState<string | null>(
+    () => initialRoom?.id ?? "reception"
+  );
+
+  useEffect(() => {
+    if (initialRoom?.id && (!roomId || roomId === "reception")) {
+      setRoomId(initialRoom.id);
+    }
+  }, [initialRoom?.id, roomId]);
+  const [player, setPlayer] = useState(() => ({
+    x: initialRoom?.spawn.x ?? 8.5,
+    z: initialRoom?.spawn.z ?? 9.4,
+    yaw: Math.PI,
+  }));
   const [presence, setPresence] = useState<PresencePoint[]>(
     source.mode === "demo" ? initialPresence : []
   );
@@ -284,6 +361,7 @@ export default function OfficeDemo({
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatTargetId, setChatTargetId] = useState<string | null>(null);
   const [zoeOpen, setZoeOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -334,9 +412,14 @@ export default function OfficeDemo({
           (item) => item.id === selectedFurnitureId
         ) ?? null)
       : null;
-  // Presence rosters may already include the signed-in person; count them once.
+  // Match the directory's room scope; count the signed-in person once.
   const onlineCount =
-    presence.filter((point) => point.id !== selfId).length + 1;
+    presence.filter(
+      (point) =>
+        point.id !== selfId &&
+        point.roomId !== "lobby" &&
+        point.roomId === roomId
+    ).length + 1;
 
   // The tower shows the people, not the rooms: an office is lit while its
   // owner is inside it, and the search only ever matches people. The demo
@@ -407,9 +490,20 @@ export default function OfficeDemo({
   const canEditRoomRef = useRef(canEditRoom);
   canEditRoomRef.current = canEditRoom;
   const canEdit = canEditRoom(currentRoom);
-  const currentMessages = currentRoom
-    ? (messagesByRoom[currentRoom.id] ?? [])
-    : [];
+  const chatRoom = chatTargetId
+    ? (roomById[chatTargetId] ?? currentRoom)
+    : currentRoom;
+  const currentMessages = chatRoom ? (messagesByRoom[chatRoom.id] ?? []) : [];
+  const existingConversations =
+    source.mode === "live"
+      ? rooms.filter(
+          (room) =>
+            room.kind === "personal" &&
+            room.chat &&
+            !room.locked &&
+            room.ownerId !== selfId
+        )
+      : [];
   const nearbyNames = useMemo(() => {
     if (!roomId) return [];
     return presence
@@ -543,6 +637,12 @@ export default function OfficeDemo({
     };
   }, []);
 
+  useEffect(() => {
+    if (selfId && engineRef.current) {
+      engineRef.current.setSelfId(selfId);
+    }
+  }, [selfId]);
+
   // The cinematic belongs to the entry screen. Any route into the office —
   // the entry button, a tour, a deep link, the live office that starts there —
   // must hand control back, so this is driven by the phase instead of by the
@@ -577,14 +677,18 @@ export default function OfficeDemo({
     return () => window.clearInterval(timer);
   }, [phase, ready]);
 
-  // The live office has no entry screen, but it still opens on the tower: the
-  // building is the front door for both routes.
+  // Both demo and live office start on the floor in reception so all
+  // players land in the same room together.
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !ready) return;
     if (openedInitialTowerRef.current) return;
     openedInitialTowerRef.current = true;
-    openTower();
-  }, [source.mode, phase, ready, openTower]);
+    engineRef.current?.setView("floor");
+    setTowerOpen(false);
+    if (initialRoom) {
+      engineRef.current?.teleportToRoom(initialRoom.id, true);
+    }
+  }, [source.mode, phase, ready, initialRoom]);
 
   useEffect(() => {
     engineRef.current?.setRooms(rooms);
@@ -863,7 +967,7 @@ export default function OfficeDemo({
       id: occ.userId,
       name: occ.displayName || occ.username || "Someone",
       x: occ.position?.x ?? 0,
-      z: occ.position?.z ?? 0,
+      z: occ.position?.z ?? (occ.position as any)?.y ?? 0,
       roomId: occ.roomId,
       status: occ.status ?? "online",
       tint: occ.avatar?.tint,
@@ -879,7 +983,7 @@ export default function OfficeDemo({
   // is in, and all of them are sequenced in one place.
   useOfficePresence({
     source,
-    active: source.mode === "live" && phase === "office",
+    active: phase === "office",
     roomId,
     pose: player,
     onOccupants: mergePresence,
@@ -888,7 +992,7 @@ export default function OfficeDemo({
 
   // A room being read is a room whose conversation matters: the one you are
   // standing in, or the one held in frame from the street.
-  const readRoomId = towerPreview ?? roomId;
+  const readRoomId = towerPreview ?? chatTargetId ?? roomId;
 
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !readRoomId) return;
@@ -935,10 +1039,12 @@ export default function OfficeDemo({
 
   // The room you are in and the office you are reading from the street are
   // usually different rooms, so they carry separate subscriptions.
+  const conversationRoomId = chatTargetId ?? roomId;
   useEffect(() => {
-    if (source.mode !== "live" || phase !== "office" || !roomId) return;
-    return source.subscribeMessages(roomId, ingestLiveMessage);
-  }, [source, phase, roomId, ingestLiveMessage]);
+    if (source.mode !== "live" || phase !== "office" || !conversationRoomId)
+      return;
+    return source.subscribeMessages(conversationRoomId, ingestLiveMessage);
+  }, [source, phase, conversationRoomId, ingestLiveMessage]);
 
   useEffect(() => {
     if (source.mode !== "live" || !towerPreview) return;
@@ -966,6 +1072,7 @@ export default function OfficeDemo({
       setSelectedFurnitureId(null);
     }
 
+    setChatTargetId(null);
     setRoomId(nextId);
 
     if (!room) {
@@ -986,6 +1093,7 @@ export default function OfficeDemo({
   // ---------------------------------------------------------------- the tower
 
   function openTower() {
+    setChatTargetId(null);
     const engine = engineRef.current;
     if (!engine) return;
     setActiveFloor(engine.getActiveFloor());
@@ -1568,9 +1676,21 @@ export default function OfficeDemo({
 
   function toggleChat() {
     const state = stateRef.current;
-    const room = state.roomId ? roomById[state.roomId] : null;
-    if (!state.chatOpen && (!room || !room.chat)) {
-      showInfo("No chat here", "Walk into a channel room or a private office.");
+    const room = chatTargetId
+      ? roomById[chatTargetId]
+      : state.roomId
+        ? roomById[state.roomId]
+        : null;
+    if (
+      !state.chatOpen &&
+      (!room || (!room.chat && room.kind !== "personal"))
+    ) {
+      showInfo(
+        "No chat here",
+        room?.kind === "personal"
+          ? "This office has no linked conversation. Open a DM in Zedu, then reload Office."
+          : "Walk into a channel room or a private office."
+      );
       return;
     }
     if (!state.chatOpen && state.editorActive) closeEditor();
@@ -1581,6 +1701,15 @@ export default function OfficeDemo({
     });
   }
 
+  function openConversation(id: string) {
+    const target = existingConversations.find((room) => room.id === id);
+    if (!target) return;
+    if (towerOpen) setTowerPreview(id);
+    else setChatTargetId(id);
+    setChatOpen(true);
+    setUnread(0);
+  }
+
   function appendMessage(message: ChatMessage) {
     setMessagesByRoom((previous) => ({
       ...previous,
@@ -1588,11 +1717,23 @@ export default function OfficeDemo({
     }));
   }
 
-  function sendChat(text: string, overrideRoomId?: string) {
+  async function sendChat(text: string, overrideRoomId?: string) {
     const state = stateRef.current;
     const id = overrideRoomId ?? state.roomId;
     const room = id ? roomById[id] : null;
-    if (!room) return;
+    if (!room?.chat) {
+      throw new Error("This space has no linked conversation.");
+    }
+    if (source.mode === "live") {
+      const sent = await source.sendMessage(room.id, text);
+      if (!sent.length)
+        throw new Error(
+          "The message could not be confirmed. Your draft is kept."
+        );
+      for (const message of sent) appendMessage(message);
+      engineRef.current?.showBubble("you", text);
+      return;
+    }
     appendMessage({
       id: `me-${Date.now()}`,
       roomId: room.id,
@@ -1603,13 +1744,6 @@ export default function OfficeDemo({
       self: true,
     });
     engineRef.current?.showBubble("you", text);
-
-    if (source.mode === "live") {
-      void source.sendMessage(room.id, text).catch(() => {
-        showError("Message not sent", "Check your connection and try again.");
-      });
-      return;
-    }
 
     const responder =
       DEMO_USERS.find(
@@ -1800,8 +1934,11 @@ export default function OfficeDemo({
     if (!ready) return;
     setPhase("office");
     engineRef.current?.setCinematic(false);
-    // The tower is the front door: enter the building by choosing a storey.
-    openTower();
+    engineRef.current?.setView("floor");
+    setTowerOpen(false);
+    if (initialRoom) {
+      navigateToRoom(initialRoom.id);
+    }
   }
 
   /**
@@ -1924,10 +2061,15 @@ export default function OfficeDemo({
 
           <ChatPanel
             open={chatOpen}
-            room={currentRoom}
+            room={chatRoom}
             messages={currentMessages}
-            onSend={sendChat}
-            onClose={() => setChatOpen(false)}
+            onSend={(text) => sendChat(text, chatTargetId ?? undefined)}
+            conversations={existingConversations}
+            onChooseConversation={openConversation}
+            onClose={() => {
+              setChatOpen(false);
+              setChatTargetId(null);
+            }}
             live={source.mode === "live"}
           />
 
@@ -2012,6 +2154,8 @@ export default function OfficeDemo({
           messages={messagesByRoom[towerPreview] ?? []}
           live={source.mode === "live"}
           onSend={(text) => sendChat(text, towerPreview)}
+          conversations={existingConversations}
+          onChooseConversation={openConversation}
           onClose={() => {
             setChatOpen(false);
             setTowerPreview(null);

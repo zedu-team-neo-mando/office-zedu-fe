@@ -56,6 +56,7 @@ function layout(rooms) {
   engine.staticGroup = new THREE.Group();
   engine.buildingGroup = new THREE.Group();
   engine.wallColliders = [];
+  engine.occlusionWalls = [];
   engine.staticColliders = [];
   engine.furnitureColliders = [];
   engine.colliders = [];

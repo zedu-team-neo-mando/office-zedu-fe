@@ -2,13 +2,13 @@
 
 import { useRef, useState } from "react";
 import {
+  ArrowUp,
   Building2,
   ChevronDown,
   ChevronUp,
   Compass,
   DoorOpen,
   HelpCircle,
-  Layers,
   LogOut,
   Map,
   MessageSquare,
@@ -202,11 +202,13 @@ export default function Hud({
           </button>
           <button
             type="button"
-            className="office-icon-button"
+            className="office-return-button absolute right-0 top-full z-10 mt-2 px-3 text-[0.62rem] lg:static lg:mt-0 lg:px-3.5 lg:text-[0.68rem]"
             onClick={onOpenTower}
-            aria-label="Open the tower"
+            aria-label="Back to tower"
+            title="Back to tower"
           >
-            <Layers className="h-4 w-4" />
+            <ArrowUp className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="whitespace-nowrap">Back to tower</span>
           </button>
           <button
             type="button"
@@ -228,7 +230,8 @@ export default function Hud({
             type="button"
             className="office-icon-button"
             onClick={onExit}
-            aria-label="Leave the office"
+            aria-label="Leave office"
+            title="Leave office"
           >
             <LogOut className="h-4 w-4" />
           </button>
