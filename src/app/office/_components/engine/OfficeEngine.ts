@@ -1150,8 +1150,8 @@ export class OfficeEngine {
 
   faceZoe() {
     this.playerYaw = Math.atan2(
-      ZOE_POS.x - this.playerPosition.x,
-      ZOE_POS.z - this.playerPosition.z
+      this.zoePosition.x - this.playerPosition.x,
+      this.zoePosition.z - this.playerPosition.z
     );
     if (this.playerRig) this.playerRig.group.rotation.y = this.playerYaw;
   }
