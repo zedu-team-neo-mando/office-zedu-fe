@@ -218,8 +218,55 @@ export default function OfficeDemo({
     for (const room of rooms) map[room.id] = room;
     return map;
   }, [rooms]);
-  const selfId = self?.id ?? DEMO_USER_ID;
-  const selfName = self?.name ?? "Ada Obi";
+
+  const demoIdentity = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { id: "demo_player", name: "Colleague", tint: "#8b5cf6" };
+    }
+    const w = window as any;
+    if (w.__officeTabIdentity) {
+      return w.__officeTabIdentity;
+    }
+    const sessionKey = "office_session_user_id";
+    const nameKey = "office_session_user_name";
+    const tintKey = "office_session_user_tint";
+    const id = `demo_${Math.random().toString(36).slice(2, 8)}`;
+    const names = [
+      "Alex",
+      "Jordan",
+      "Taylor",
+      "Casey",
+      "Morgan",
+      "Sam",
+      "Kai",
+      "Riley",
+      "Quinn",
+      "Avery",
+    ];
+    const name = names[Math.floor(Math.random() * names.length)];
+    const tints = [
+      "#8b5cf6",
+      "#3b82f6",
+      "#10b981",
+      "#f59e0b",
+      "#ec4899",
+      "#06b6d4",
+    ];
+    const tint = tints[Math.floor(Math.random() * tints.length)];
+    const identity = { id, name, tint };
+    w.__officeTabIdentity = identity;
+    try {
+      sessionStorage.setItem(sessionKey, id);
+      sessionStorage.setItem(nameKey, name);
+      sessionStorage.setItem(tintKey, tint);
+    } catch {
+      // Ignore storage errors in restricted contexts
+    }
+    return identity;
+  }, []);
+
+  const selfId = self?.id ?? demoIdentity.id;
+  const selfName = self?.name ?? demoIdentity.name;
   const onboardingKey = `office-onboarding-v2-${source.mode}`;
   // The live rooms come from the server, so hit testing has to use them and
   // not the demo floor plan compiled into office-data. Only the storey the
@@ -237,18 +284,48 @@ export default function OfficeDemo({
   const [ready, setReady] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
 
-  const [avatar, setAvatar] = useState<AvatarConfig>(source.initialAvatar);
-  const [avatarDraft, setAvatarDraft] = useState<AvatarConfig>(
-    source.initialAvatar
-  );
+  const [avatar, setAvatar] = useState<AvatarConfig>(() => ({
+    ...source.initialAvatar,
+    tint: self ? source.initialAvatar.tint : demoIdentity.tint,
+  }));
+  const [avatarDraft, setAvatarDraft] = useState<AvatarConfig>(() => ({
+    ...source.initialAvatar,
+    tint: self ? source.initialAvatar.tint : demoIdentity.tint,
+  }));
   const [layouts, setLayouts] = useState<Record<string, FurnitureItem[]>>(
     () => source.initialLayouts
   );
-  const [roomId, setRoomId] = useState<string | null>(
-    () =>
-      rooms.find((room) => room.id === "reception")?.id ?? rooms[0]?.id ?? null
+
+  const commonFloorRooms = useMemo(
+    () => rooms.filter((room) => (room.floorIndex ?? 0) === 0),
+    [rooms]
   );
-  const [player, setPlayer] = useState({ x: 8.5, z: 9.4, yaw: Math.PI });
+  const initialRoom = useMemo(
+    () =>
+      commonFloorRooms.find((room) => room.kind === "reception") ??
+      commonFloorRooms.find((room) => room.id === "reception") ??
+      commonFloorRooms.find((room) => room.kind === "lobby") ??
+      commonFloorRooms.find((room) => room.kind !== "personal") ??
+      commonFloorRooms[0] ??
+      rooms.find((room) => room.kind === "reception") ??
+      rooms[0] ??
+      null,
+    [commonFloorRooms, rooms]
+  );
+  const [roomId, setRoomId] = useState<string | null>(
+    () => initialRoom?.id ?? "reception"
+  );
+
+  useEffect(() => {
+    if (initialRoom?.id && (!roomId || roomId === "reception")) {
+      setRoomId(initialRoom.id);
+    }
+  }, [initialRoom?.id, roomId]);
+  const [player, setPlayer] = useState(() => ({
+    x: initialRoom?.spawn.x ?? 8.5,
+    z: initialRoom?.spawn.z ?? 9.4,
+    yaw: Math.PI,
+  }));
   const [presence, setPresence] = useState<PresencePoint[]>(
     source.mode === "demo" ? initialPresence : []
   );
@@ -548,6 +625,12 @@ export default function OfficeDemo({
     };
   }, []);
 
+  useEffect(() => {
+    if (selfId && engineRef.current) {
+      engineRef.current.setSelfId(selfId);
+    }
+  }, [selfId]);
+
   // The cinematic belongs to the entry screen. Any route into the office —
   // the entry button, a tour, a deep link, the live office that starts there —
   // must hand control back, so this is driven by the phase instead of by the
@@ -582,14 +665,18 @@ export default function OfficeDemo({
     return () => window.clearInterval(timer);
   }, [phase, ready]);
 
-  // The live office has no entry screen, but it still opens on the tower: the
-  // building is the front door for both routes.
+  // Both demo and live office start on the floor in reception so all
+  // players land in the same room together.
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !ready) return;
     if (openedInitialTowerRef.current) return;
     openedInitialTowerRef.current = true;
-    openTower();
-  }, [source.mode, phase, ready, openTower]);
+    engineRef.current?.setView("floor");
+    setTowerOpen(false);
+    if (initialRoom) {
+      engineRef.current?.teleportToRoom(initialRoom.id, true);
+    }
+  }, [source.mode, phase, ready, initialRoom]);
 
   useEffect(() => {
     engineRef.current?.setRooms(rooms);
@@ -868,7 +955,7 @@ export default function OfficeDemo({
       id: occ.userId,
       name: occ.displayName || occ.username || "Someone",
       x: occ.position?.x ?? 0,
-      z: occ.position?.z ?? 0,
+      z: occ.position?.z ?? (occ.position as any)?.y ?? 0,
       roomId: occ.roomId,
       status: occ.status ?? "online",
       tint: occ.avatar?.tint,
@@ -884,7 +971,7 @@ export default function OfficeDemo({
   // is in, and all of them are sequenced in one place.
   useOfficePresence({
     source,
-    active: source.mode === "live" && phase === "office",
+    active: phase === "office",
     roomId,
     pose: player,
     onOccupants: mergePresence,
@@ -1805,8 +1892,11 @@ export default function OfficeDemo({
     if (!ready) return;
     setPhase("office");
     engineRef.current?.setCinematic(false);
-    // The tower is the front door: enter the building by choosing a storey.
-    openTower();
+    engineRef.current?.setView("floor");
+    setTowerOpen(false);
+    if (initialRoom) {
+      navigateToRoom(initialRoom.id);
+    }
   }
 
   /**
