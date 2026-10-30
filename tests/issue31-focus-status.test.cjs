@@ -42,12 +42,16 @@ function load(file, overrides = {}, cache = new Map()) {
 }
 function sourceHarness(status = "away") {
   const writes = [],
+    socketWrites = [],
     handlers = {};
   const subscription = {
     on: (event, fn) => {
       handlers[event] = fn;
     },
     off() {},
+    publish: async (payload) => {
+      socketWrites.push(payload);
+    },
     subscribe() {},
     state: "unsubscribed",
   };
@@ -85,7 +89,7 @@ function sourceHarness(status = "away") {
     { id: "focus:1", kind: "focus" },
     { id: "focus:2", kind: "focus" },
   ];
-  return { source, writes, handlers, requests };
+  return { source, writes, socketWrites, subscription, handlers, requests };
 }
 for (const previous of ["online", "away", "call", "dnd"]) {
   test(`Focus entries and movements publish DND and restore ${previous}`, async () => {
@@ -106,6 +110,24 @@ for (const previous of ["online", "away", "call", "dnd"]) {
     stop();
   });
 }
+for (const previous of ["online", "away", "call"]) {
+  test(`WebSocket presence carries DND and restores ${previous}`, async () => {
+    const { source, socketWrites, subscription } = sourceHarness(previous);
+    source.previousPresenceStatus = previous;
+    source.presenceSubscription = subscription;
+    subscription.state = "subscribed";
+    source.presenceRoomId = "focus:1";
+    await source.enterRoom("focus:1");
+    await source.sendPosition("focus:1", 19, 10, 0);
+    assert.ok(socketWrites.length >= 3);
+    assert.ok(socketWrites.every((event) => event.presence.status === "dnd"));
+    source.presenceRoomId = "reception";
+    await source.enterRoom("reception");
+    await source.sendPosition("reception", 12, 3, 0);
+    assert.equal(socketWrites.at(-1).presence.status, previous);
+  });
+}
+
 const { OfficeEngine } = load("app/office/_components/engine/OfficeEngine.ts", {
   "./tower-scene": {},
 });

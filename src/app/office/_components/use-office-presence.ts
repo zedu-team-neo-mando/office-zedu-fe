@@ -79,23 +79,26 @@ export function useOfficePresence({
   // may claim to be live, and tearing the subscription down withdraws the
   // claim, so a rapid room change can never leave the previous room behind.
   useEffect(() => {
-    if (!active) return;
+    if (!active || !roomId) {
+      setLiveRoom(null);
+      onOccupantsRef.current([]);
+      return;
+    }
 
-    const room = roomId ?? "lobby";
     const stop = source.subscribePresence(
-      room,
+      roomId,
       (occupants) => onOccupantsRef.current(occupants),
       (state) => {
         onStateRef.current?.(state);
         setLiveRoom((current) =>
-          state === "live" ? room : current === room ? null : current
+          state === "live" ? roomId : current === roomId ? null : current
         );
       }
     );
 
     return () => {
       stop();
-      setLiveRoom((current) => (current === room ? null : current));
+      setLiveRoom((current) => (current === roomId ? null : current));
     };
   }, [source, active, roomId]);
 
@@ -175,9 +178,8 @@ export function useOfficePresence({
       const sent = lastPublishedPoseRef.current;
       const moved =
         !sent ||
-        sent.x !== current.x ||
-        sent.z !== current.z ||
-        sent.yaw !== current.yaw;
+        Math.hypot(sent.x - current.x, sent.z - current.z) > 0.05 ||
+        Math.abs(sent.yaw - current.yaw) > 0.05;
       if (lastPublishedAtRef.current > 0) {
         const gap = moved ? TICK_MS : HEARTBEAT_MS;
         if (now - lastPublishedAtRef.current < gap) return;
@@ -215,6 +217,7 @@ export function useOfficePresence({
         });
     };
 
+    publish();
     const timer = window.setInterval(publish, TICK_MS);
     return () => {
       window.clearInterval(timer);
