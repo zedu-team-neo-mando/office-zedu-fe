@@ -361,6 +361,7 @@ export default function OfficeDemo({
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatTargetId, setChatTargetId] = useState<string | null>(null);
   const [zoeOpen, setZoeOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -489,9 +490,20 @@ export default function OfficeDemo({
   const canEditRoomRef = useRef(canEditRoom);
   canEditRoomRef.current = canEditRoom;
   const canEdit = canEditRoom(currentRoom);
-  const currentMessages = currentRoom
-    ? (messagesByRoom[currentRoom.id] ?? [])
-    : [];
+  const chatRoom = chatTargetId
+    ? (roomById[chatTargetId] ?? currentRoom)
+    : currentRoom;
+  const currentMessages = chatRoom ? (messagesByRoom[chatRoom.id] ?? []) : [];
+  const existingConversations =
+    source.mode === "live"
+      ? rooms.filter(
+          (room) =>
+            room.kind === "personal" &&
+            room.chat &&
+            !room.locked &&
+            room.ownerId !== selfId
+        )
+      : [];
   const nearbyNames = useMemo(() => {
     if (!roomId) return [];
     return presence
@@ -980,7 +992,7 @@ export default function OfficeDemo({
 
   // A room being read is a room whose conversation matters: the one you are
   // standing in, or the one held in frame from the street.
-  const readRoomId = towerPreview ?? roomId;
+  const readRoomId = towerPreview ?? chatTargetId ?? roomId;
 
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !readRoomId) return;
@@ -1027,10 +1039,12 @@ export default function OfficeDemo({
 
   // The room you are in and the office you are reading from the street are
   // usually different rooms, so they carry separate subscriptions.
+  const conversationRoomId = chatTargetId ?? roomId;
   useEffect(() => {
-    if (source.mode !== "live" || phase !== "office" || !roomId) return;
-    return source.subscribeMessages(roomId, ingestLiveMessage);
-  }, [source, phase, roomId, ingestLiveMessage]);
+    if (source.mode !== "live" || phase !== "office" || !conversationRoomId)
+      return;
+    return source.subscribeMessages(conversationRoomId, ingestLiveMessage);
+  }, [source, phase, conversationRoomId, ingestLiveMessage]);
 
   useEffect(() => {
     if (source.mode !== "live" || !towerPreview) return;
@@ -1058,6 +1072,7 @@ export default function OfficeDemo({
       setSelectedFurnitureId(null);
     }
 
+    setChatTargetId(null);
     setRoomId(nextId);
 
     if (!room) {
@@ -1078,6 +1093,7 @@ export default function OfficeDemo({
   // ---------------------------------------------------------------- the tower
 
   function openTower() {
+    setChatTargetId(null);
     const engine = engineRef.current;
     if (!engine) return;
     setActiveFloor(engine.getActiveFloor());
@@ -1660,9 +1676,21 @@ export default function OfficeDemo({
 
   function toggleChat() {
     const state = stateRef.current;
-    const room = state.roomId ? roomById[state.roomId] : null;
-    if (!state.chatOpen && (!room || !room.chat)) {
-      showInfo("No chat here", "Walk into a channel room or a private office.");
+    const room = chatTargetId
+      ? roomById[chatTargetId]
+      : state.roomId
+        ? roomById[state.roomId]
+        : null;
+    if (
+      !state.chatOpen &&
+      (!room || (!room.chat && room.kind !== "personal"))
+    ) {
+      showInfo(
+        "No chat here",
+        room?.kind === "personal"
+          ? "This office has no linked conversation. Open a DM in Zedu, then reload Office."
+          : "Walk into a channel room or a private office."
+      );
       return;
     }
     if (!state.chatOpen && state.editorActive) closeEditor();
@@ -1673,6 +1701,15 @@ export default function OfficeDemo({
     });
   }
 
+  function openConversation(id: string) {
+    const target = existingConversations.find((room) => room.id === id);
+    if (!target) return;
+    if (towerOpen) setTowerPreview(id);
+    else setChatTargetId(id);
+    setChatOpen(true);
+    setUnread(0);
+  }
+
   function appendMessage(message: ChatMessage) {
     setMessagesByRoom((previous) => ({
       ...previous,
@@ -1680,11 +1717,23 @@ export default function OfficeDemo({
     }));
   }
 
-  function sendChat(text: string, overrideRoomId?: string) {
+  async function sendChat(text: string, overrideRoomId?: string) {
     const state = stateRef.current;
     const id = overrideRoomId ?? state.roomId;
     const room = id ? roomById[id] : null;
-    if (!room) return;
+    if (!room?.chat) {
+      throw new Error("This space has no linked conversation.");
+    }
+    if (source.mode === "live") {
+      const sent = await source.sendMessage(room.id, text);
+      if (!sent.length)
+        throw new Error(
+          "The message could not be confirmed. Your draft is kept."
+        );
+      for (const message of sent) appendMessage(message);
+      engineRef.current?.showBubble("you", text);
+      return;
+    }
     appendMessage({
       id: `me-${Date.now()}`,
       roomId: room.id,
@@ -1695,13 +1744,6 @@ export default function OfficeDemo({
       self: true,
     });
     engineRef.current?.showBubble("you", text);
-
-    if (source.mode === "live") {
-      void source.sendMessage(room.id, text).catch(() => {
-        showError("Message not sent", "Check your connection and try again.");
-      });
-      return;
-    }
 
     const responder =
       DEMO_USERS.find(
@@ -2019,10 +2061,15 @@ export default function OfficeDemo({
 
           <ChatPanel
             open={chatOpen}
-            room={currentRoom}
+            room={chatRoom}
             messages={currentMessages}
-            onSend={sendChat}
-            onClose={() => setChatOpen(false)}
+            onSend={(text) => sendChat(text, chatTargetId ?? undefined)}
+            conversations={existingConversations}
+            onChooseConversation={openConversation}
+            onClose={() => {
+              setChatOpen(false);
+              setChatTargetId(null);
+            }}
             live={source.mode === "live"}
           />
 
@@ -2107,6 +2154,8 @@ export default function OfficeDemo({
           messages={messagesByRoom[towerPreview] ?? []}
           live={source.mode === "live"}
           onSend={(text) => sendChat(text, towerPreview)}
+          conversations={existingConversations}
+          onChooseConversation={openConversation}
           onClose={() => {
             setChatOpen(false);
             setTowerPreview(null);

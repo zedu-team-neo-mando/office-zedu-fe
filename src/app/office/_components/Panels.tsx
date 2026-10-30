@@ -304,16 +304,25 @@ export function ChatPanel({
   onSend,
   onClose,
   live = false,
+  conversations = [],
+  onChooseConversation,
 }: {
   open: boolean;
   room: OfficeRoom | null;
   messages: ChatMessage[];
-  onSend: (text: string) => void;
+  onSend: (text: string) => void | Promise<void>;
   onClose: () => void;
   /** Live office rooms mirror the real Zedu conversation; the demo does not. */
   live?: boolean;
+  conversations?: OfficeRoom[];
+  onChooseConversation?: (roomId: string) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const pendingRef = useRef(false);
+  const roomRef = useRef(room?.id);
+  roomRef.current = room?.id;
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -331,11 +340,30 @@ export function ChatPanel({
     return undefined;
   }, [open]);
 
-  const submit = () => {
+  const submit = async () => {
     const text = draft.trim();
-    if (!text) return;
-    onSend(text);
-    setDraft("");
+    if (!text || !room?.chat || pendingRef.current) return;
+    const submittedRoom = room.id;
+    pendingRef.current = true;
+    setSending(true);
+    setSendError("");
+    try {
+      await onSend(text);
+      if (roomRef.current === submittedRoom) {
+        setDraft((current) => (current === draft ? "" : current));
+      }
+    } catch (error) {
+      if (roomRef.current === submittedRoom) {
+        setSendError(
+          error instanceof Error
+            ? error.message
+            : "Message not sent. Your draft is kept."
+        );
+      }
+    } finally {
+      pendingRef.current = false;
+      setSending(false);
+    }
   };
 
   return (
@@ -371,7 +399,7 @@ export function ChatPanel({
           </div>
           <span className="hidden items-center gap-1 rounded-full border border-[#34d399]/20 bg-[#34d399]/10 px-2 py-1 text-[0.55rem] font-extrabold uppercase tracking-wider text-[#86efac] sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-[#34d399]" />
-            {live ? "synced" : "live"}
+            {live ? (room?.chat ? "synced" : "unavailable") : "live"}
           </span>
           <button
             type="button"
@@ -410,13 +438,14 @@ export function ChatPanel({
               className="border-t border-white/8 p-3"
               onSubmit={(event) => {
                 event.preventDefault();
-                submit();
+                void submit();
               }}
             >
               <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 focus-within:border-[#a78bfa]/45">
                 <input
                   ref={inputRef}
                   value={draft}
+                  disabled={sending}
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     room.kind === "personal"
@@ -427,13 +456,22 @@ export function ChatPanel({
                 />
                 <button
                   type="submit"
-                  disabled={!draft.trim()}
+                  disabled={sending || !draft.trim()}
                   className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#8b5cf6] text-white transition-opacity disabled:opacity-35"
                   aria-label="Send message"
                 >
-                  <Send className="h-3.5 w-3.5" />
+                  {sending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Send className="h-3.5 w-3.5" />
+                  )}
                 </button>
               </div>
+              {sendError && (
+                <p role="alert" className="mt-2 text-xs text-rose-300">
+                  {sendError}
+                </p>
+              )}
               <p className="mt-1.5 text-[0.55rem] font-semibold uppercase tracking-[0.12em] text-[#5f6880]">
                 {live
                   ? "Live · sent to the same conversation as the 2D chat"
@@ -447,12 +485,37 @@ export function ChatPanel({
               <Lock className="h-5 w-5" />
             </span>
             <p className="text-sm font-bold text-white">
-              No chat in this space
+              {live && room?.kind === "personal"
+                ? "No conversation linked"
+                : "No chat in this space"}
             </p>
             <p className="text-[0.72rem] leading-relaxed text-[#7f89a4]">
-              Walk into a channel room or a private office to see the
-              conversation that already exists there.
+              {live && room?.kind === "personal"
+                ? conversations.length > 0
+                  ? "Your own office is not a conversation. Choose the person you want to reply to below."
+                  : "This office has no linked DM conversation. Open a DM in Zedu, then reload Office to chat here."
+                : "Walk into a channel room or a private office to see the conversation that already exists there."}
             </p>
+            {live &&
+              room?.kind === "personal" &&
+              onChooseConversation &&
+              conversations.length > 0 && (
+                <div className="mt-2 flex w-full flex-col gap-2">
+                  <p className="text-xs text-[#b9c1d6]">
+                    Reply using an existing conversation:
+                  </p>
+                  {conversations.map((conversation) => (
+                    <button
+                      key={conversation.id}
+                      type="button"
+                      className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white hover:bg-white/10"
+                      onClick={() => onChooseConversation(conversation.id)}
+                    >
+                      Chat with {conversation.name}
+                    </button>
+                  ))}
+                </div>
+              )}
           </div>
         )}
       </section>
