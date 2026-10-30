@@ -1123,6 +1123,22 @@ export function validatePlacement(
   return null;
 }
 
+/**
+ * Everyone in `roomId` except the requester. Presence carries the requester's
+ * own record, so the HUD, the room directory and Zoe all have to drop it or
+ * the user is counted (and described) as a second person.
+ */
+export function othersInRoom<T extends { id: string; roomId: string }>(
+  presence: T[],
+  roomId: string | null,
+  selfId: string
+): T[] {
+  if (!roomId) return [];
+  return presence.filter(
+    (point) => point.roomId === roomId && point.id !== selfId
+  );
+}
+
 export function nearbyUsers(
   users: DemoUser[],
   roomId: string,

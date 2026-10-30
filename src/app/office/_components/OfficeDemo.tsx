@@ -28,6 +28,7 @@ import {
   type ChatMessage,
   type FurnitureItem,
   type PresenceStatus,
+  othersInRoom,
   validatePlacement,
 } from "./office-data";
 import { demoSource, demoTowerOffices } from "./demo-office-source";
@@ -414,11 +415,10 @@ export default function OfficeDemo({
       : null;
   // Match the directory's room scope; count the signed-in person once.
   const onlineCount =
-    presence.filter(
-      (point) =>
-        point.id !== selfId &&
-        point.roomId !== "lobby" &&
-        point.roomId === roomId
+    othersInRoom(
+      presence.filter((point) => point.roomId !== "lobby"),
+      roomId,
+      selfId
     ).length + 1;
 
   // The tower shows the people, not the rooms: an office is lit while its
@@ -505,9 +505,7 @@ export default function OfficeDemo({
         )
       : [];
   const nearbyNames = useMemo(() => {
-    if (!roomId) return [];
-    return presence
-      .filter((agent) => agent.roomId === roomId)
+    return othersInRoom(presence, roomId, selfId)
       .map(
         (agent) =>
           agent.name ??
@@ -515,7 +513,7 @@ export default function OfficeDemo({
           agent.id
       )
       .slice(0, 6);
-  }, [presence, roomId]);
+  }, [presence, roomId, selfId]);
 
   const stateRef = useRef({
     phase,
@@ -2055,6 +2053,7 @@ export default function OfficeDemo({
             currentRoomId={roomId}
             presence={presence}
             playerRoomId={roomId}
+            selfId={selfId}
             onClose={() => setDirectoryOpen(false)}
             onNavigate={navigateToRoom}
           />
