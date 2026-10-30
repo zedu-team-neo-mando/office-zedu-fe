@@ -218,8 +218,51 @@ export default function OfficeDemo({
     for (const room of rooms) map[room.id] = room;
     return map;
   }, [rooms]);
-  const selfId = self?.id ?? DEMO_USER_ID;
-  const selfName = self?.name ?? "Ada Obi";
+
+  const demoIdentity = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { id: "demo_player", name: "Colleague", tint: "#8b5cf6" };
+    }
+    const sessionKey = "office_session_user_id";
+    const nameKey = "office_session_user_name";
+    const tintKey = "office_session_user_tint";
+    let id = sessionStorage.getItem(sessionKey);
+    let name = sessionStorage.getItem(nameKey);
+    let tint = sessionStorage.getItem(tintKey);
+    if (!id) {
+      id = `demo_${Math.random().toString(36).slice(2, 8)}`;
+      sessionStorage.setItem(sessionKey, id);
+    }
+    if (!name) {
+      const names = [
+        "Alex",
+        "Jordan",
+        "Taylor",
+        "Casey",
+        "Morgan",
+        "Sam",
+        "Kai",
+      ];
+      name = names[Math.floor(Math.random() * names.length)];
+      sessionStorage.setItem(nameKey, name);
+    }
+    if (!tint) {
+      const tints = [
+        "#8b5cf6",
+        "#3b82f6",
+        "#10b981",
+        "#f59e0b",
+        "#ec4899",
+        "#06b6d4",
+      ];
+      tint = tints[Math.floor(Math.random() * tints.length)];
+      sessionStorage.setItem(tintKey, tint);
+    }
+    return { id, name, tint };
+  }, []);
+
+  const selfId = self?.id ?? demoIdentity.id;
+  const selfName = self?.name ?? demoIdentity.name;
   const onboardingKey = `office-onboarding-v2-${source.mode}`;
   // The live rooms come from the server, so hit testing has to use them and
   // not the demo floor plan compiled into office-data. Only the storey the
@@ -237,18 +280,34 @@ export default function OfficeDemo({
   const [ready, setReady] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
 
-  const [avatar, setAvatar] = useState<AvatarConfig>(source.initialAvatar);
-  const [avatarDraft, setAvatarDraft] = useState<AvatarConfig>(
-    source.initialAvatar
-  );
+  const [avatar, setAvatar] = useState<AvatarConfig>(() => ({
+    ...source.initialAvatar,
+    tint: self ? source.initialAvatar.tint : demoIdentity.tint,
+  }));
+  const [avatarDraft, setAvatarDraft] = useState<AvatarConfig>(() => ({
+    ...source.initialAvatar,
+    tint: self ? source.initialAvatar.tint : demoIdentity.tint,
+  }));
   const [layouts, setLayouts] = useState<Record<string, FurnitureItem[]>>(
     () => source.initialLayouts
   );
-  const [roomId, setRoomId] = useState<string | null>(
+
+  const initialRoom = useMemo(
     () =>
-      rooms.find((room) => room.id === "reception")?.id ?? rooms[0]?.id ?? null
+      rooms.find((room) => room.kind === "reception") ??
+      rooms.find((room) => room.id === "reception") ??
+      rooms[0] ??
+      null,
+    [rooms]
   );
-  const [player, setPlayer] = useState({ x: 8.5, z: 9.4, yaw: Math.PI });
+  const [roomId, setRoomId] = useState<string | null>(
+    () => initialRoom?.id ?? "reception"
+  );
+  const [player, setPlayer] = useState(() => ({
+    x: initialRoom?.spawn.x ?? 8.5,
+    z: initialRoom?.spawn.z ?? 9.4,
+    yaw: Math.PI,
+  }));
   const [presence, setPresence] = useState<PresencePoint[]>(
     source.mode === "demo" ? initialPresence : []
   );
@@ -542,6 +601,12 @@ export default function OfficeDemo({
       engineRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (selfId && engineRef.current) {
+      engineRef.current.setSelfId(selfId);
+    }
+  }, [selfId]);
 
   // The cinematic belongs to the entry screen. Any route into the office —
   // the entry button, a tour, a deep link, the live office that starts there —
@@ -863,7 +928,7 @@ export default function OfficeDemo({
       id: occ.userId,
       name: occ.displayName || occ.username || "Someone",
       x: occ.position?.x ?? 0,
-      z: occ.position?.z ?? 0,
+      z: occ.position?.z ?? (occ.position as any)?.y ?? 0,
       roomId: occ.roomId,
       status: occ.status ?? "online",
       tint: occ.avatar?.tint,
@@ -879,7 +944,7 @@ export default function OfficeDemo({
   // is in, and all of them are sequenced in one place.
   useOfficePresence({
     source,
-    active: source.mode === "live" && phase === "office",
+    active: phase === "office",
     roomId,
     pose: player,
     onOccupants: mergePresence,

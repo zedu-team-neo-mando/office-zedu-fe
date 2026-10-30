@@ -90,6 +90,41 @@ function unwrap<T>(response: any, fallback: string): T {
   return response?.data?.data as T;
 }
 
+function normalizeOccupant(raw: any, roomId: string): OfficeOccupant | null {
+  if (!raw || typeof raw !== "object") return null;
+  const userId = String(raw.userId || raw.user_id || raw.id || "");
+  if (!userId) return null;
+
+  const rawPos = raw.position || raw.pos || {};
+  const x = Number(rawPos.x ?? 0);
+  const z = Number(rawPos.z ?? rawPos.y ?? 0);
+  const y = Number(rawPos.z !== undefined ? (rawPos.y ?? 0) : 0);
+
+  const rawAvatar = raw.avatar || raw.avatar_config || {};
+
+  return {
+    userId,
+    displayName:
+      raw.displayName ||
+      raw.display_name ||
+      raw.username ||
+      raw.name ||
+      "Colleague",
+    username: raw.username || raw.user_name || "",
+    avatar: {
+      tint: rawAvatar.tint || raw.tint || "#8b5cf6",
+      body: rawAvatar.body || "b",
+      outfit: rawAvatar.outfit || "smart",
+      accessory: rawAvatar.accessory || "none",
+    },
+    roomId: raw.roomId || raw.room_id || roomId,
+    status: raw.status || "online",
+    position: { x, y, z },
+    rotation: Number(raw.rotation ?? raw.yaw ?? 0),
+    updatedAt: raw.updatedAt || raw.updated_at || new Date().toISOString(),
+  };
+}
+
 /**
  * Whether the incoming record is older than the one already held. A record
  * whose timestamp cannot be read is never considered older, so a snapshot can
@@ -615,12 +650,14 @@ export class LiveOfficeSource implements OfficeSource {
       `/office/rooms/${encodeRoomId(roomId)}/occupants`
     );
 
-    return (
-      unwrap<OfficeOccupant[] | undefined>(
-        response,
-        "The room could not be read."
-      ) ?? []
+    const data = unwrap<any[] | { occupants?: any[] } | undefined>(
+      response,
+      "The room could not be read."
     );
+    const list = Array.isArray(data) ? data : (data?.occupants ?? []);
+    return list
+      .map((item) => normalizeOccupant(item, roomId))
+      .filter((occ): occ is OfficeOccupant => Boolean(occ));
   }
 
   subscribePresence(
@@ -715,11 +752,21 @@ export class LiveOfficeSource implements OfficeSource {
     };
 
     const onPublication = (ctx: any) => {
-      const presence = ctx?.data?.presence as OfficeOccupant | undefined;
-      const eventType = ctx?.data?.type as string | undefined;
+      const data = ctx?.data;
+      if (!data) return;
+
+      const eventType = data?.type || data?.event;
+      const rawPresence =
+        data?.presence ||
+        data?.occupant ||
+        data?.data ||
+        (data?.userId || data?.user_id ? data : undefined);
+      if (!rawPresence) return;
+
+      const presence = normalizeOccupant(rawPresence, roomId);
       if (!presence) return;
 
-      if (eventType === "leave") {
+      if (eventType === "leave" || data?.action === "leave") {
         roster.delete(presence.userId);
         inFlight?.upserts.delete(presence.userId);
         inFlight?.left.add(presence.userId);

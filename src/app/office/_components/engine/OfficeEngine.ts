@@ -73,6 +73,9 @@ interface AvatarRig {
   torso: THREE.Mesh;
   ring: THREE.Mesh;
   phase: number;
+  targetX?: number;
+  targetZ?: number;
+  targetYaw?: number;
   bubble?: {
     sprite: THREE.Sprite;
     material: THREE.SpriteMaterial;
@@ -826,7 +829,9 @@ export class OfficeEngine {
       this.syncZoe();
       const entrance =
         this.rooms.find((room) => room.kind === "reception") ??
-        this.rooms.find((room) => room.kind === "lobby");
+        this.rooms.find((room) => room.id === "reception") ??
+        this.rooms.find((room) => room.kind === "lobby") ??
+        this.rooms[0];
       if (entrance) {
         this.playerPosition.set(entrance.spawn.x, 0, entrance.spawn.z);
         this.cameraTarget.set(entrance.spawn.x, 1.25, entrance.spawn.z);
@@ -979,6 +984,17 @@ export class OfficeEngine {
     this.refreshSelection();
   }
 
+  setSelfId(selfId: string) {
+    if (this.selfId === selfId) return;
+    this.selfId = selfId;
+    const existingSelf = this.agentRigs.get(selfId);
+    if (existingSelf) {
+      this.avatarGroup.remove(existingSelf.group);
+      disposeObject(existingSelf.group);
+      this.agentRigs.delete(selfId);
+    }
+  }
+
   // Reconciles the roster of other people in the office. Called from the
   // live source whenever the roster changes (join, update, leave).
   setOccupants(occupants: OfficeOccupant[]) {
@@ -989,6 +1005,10 @@ export class OfficeEngine {
       if (occ.userId === this.selfId || occ.userId === "you") continue; // self is rendered separately
 
       let rig = this.agentRigs.get(occ.userId);
+      const posX = occ.position?.x ?? 0;
+      const posZ = occ.position?.z ?? (occ.position as any)?.y ?? 0;
+      const yaw = occ.rotation ?? 0;
+
       if (!rig) {
         rig = this.createAvatar(
           occ.avatar,
@@ -998,12 +1018,27 @@ export class OfficeEngine {
           false,
           false
         );
+        rig.group.position.set(posX, 0, posZ);
+        rig.group.rotation.y = yaw;
+        rig.targetX = posX;
+        rig.targetZ = posZ;
+        rig.targetYaw = yaw;
         this.agentRigs.set(occ.userId, rig);
         this.avatarGroup.add(rig.group);
+      } else {
+        const dx = posX - rig.group.position.x;
+        const dz = posZ - rig.group.position.z;
+        const dist = Math.hypot(dx, dz);
+        // If occupant teleported or changed room/spawn (> 6m), snap immediately
+        if (dist > 6) {
+          rig.group.position.set(posX, 0, posZ);
+          rig.group.rotation.y = yaw;
+        }
+        rig.targetX = posX;
+        rig.targetZ = posZ;
+        rig.targetYaw = yaw;
       }
 
-      rig.group.position.set(occ.position.x, 0, occ.position.z);
-      rig.group.rotation.y = occ.rotation ?? 0;
       this.updateRigStatus(rig, occ.status);
       next.set(occ.userId, rig);
     }
@@ -1013,7 +1048,6 @@ export class OfficeEngine {
       if (!next.has(id)) {
         this.avatarGroup.remove(rig.group);
         disposeObject(rig.group);
-        this.agentRigs.delete(id);
       }
     }
 
@@ -4640,6 +4674,7 @@ export class OfficeEngine {
 
     this.updatePlayer(dt, elapsed);
     this.updateAgents(dt, elapsed);
+    this.updateOccupants(dt, elapsed);
     this.updateZoe(elapsed);
     this.updateBubbles();
     this.updateLabels();
@@ -4818,6 +4853,50 @@ export class OfficeEngine {
     }
   }
 
+  private updateOccupants(dt: number, elapsed: number) {
+    if (!this.isLive) return;
+
+    for (const rig of this.agentRigs.values()) {
+      if (rig.targetX === undefined || rig.targetZ === undefined) {
+        this.animateRig(rig, 0, elapsed);
+        continue;
+      }
+
+      const dx = rig.targetX - rig.group.position.x;
+      const dz = rig.targetZ - rig.group.position.z;
+      const dist = Math.hypot(dx, dz);
+
+      let speed = 0;
+      if (dist > 0.02) {
+        const lerpFactor = Math.min(1, dt * 10);
+        rig.group.position.x += dx * lerpFactor;
+        rig.group.position.z += dz * lerpFactor;
+
+        speed = Math.min(3.5, dist / Math.max(dt, 0.016));
+
+        const moveYaw = Math.atan2(dx, dz);
+        const desiredYaw =
+          dist > 0.08 ? moveYaw : (rig.targetYaw ?? rig.group.rotation.y);
+        const yawDelta =
+          ((desiredYaw - rig.group.rotation.y + Math.PI * 3) % (Math.PI * 2)) -
+          Math.PI;
+        rig.group.rotation.y += yawDelta * Math.min(dt * 12, 1);
+      } else {
+        rig.group.position.x = rig.targetX;
+        rig.group.position.z = rig.targetZ;
+        if (rig.targetYaw !== undefined) {
+          const yawDelta =
+            ((rig.targetYaw - rig.group.rotation.y + Math.PI * 3) %
+              (Math.PI * 2)) -
+            Math.PI;
+          rig.group.rotation.y += yawDelta * Math.min(dt * 12, 1);
+        }
+      }
+
+      this.animateRig(rig, speed, elapsed);
+    }
+  }
+
   private updateZoe(elapsed: number) {
     if (!this.zoeRig) return;
     this.animateRig(this.zoeRig, 0, elapsed);
@@ -4841,6 +4920,7 @@ export class OfficeEngine {
     const rigs = [
       this.playerRig,
       ...this.agents.map((agent) => agent.rig),
+      ...this.agentRigs.values(),
       this.zoeRig,
     ];
     for (const rig of rigs) {
