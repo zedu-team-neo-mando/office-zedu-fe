@@ -1139,13 +1139,13 @@ export class TowerScene {
   ) {
     if (!isTowerRoom(office)) {
       return {
-        ceilingColor: 0x33302b,
-        ceilingEmissive: 0x000000,
-        ceilingIntensity: 0.0,
-        wallColor: new THREE.Color(0x23201d),
-        wallEmissive: 0x000000,
-        wallIntensity: 0.0,
-        floorColor: 0x181512,
+        ceilingColor: 0xc4bcae,
+        ceilingEmissive: 0xcca666,
+        ceilingIntensity: 0.25,
+        wallColor: baseWallColor.clone().multiplyScalar(0.88),
+        wallEmissive: PALETTE.glow,
+        wallIntensity: 0.05 * warmth,
+        floorColor: 0xa27c5b,
       };
     }
 
@@ -1163,28 +1163,29 @@ export class TowerScene {
     }
 
     if (!office.present || office.status === "away") {
-      // Away or unoccupied personal office: unlit / dim night state
+      // Away or unoccupied personal office: faint ambient night level (~15-20%)
+      // preserving architectural wall, floor and furniture geometry without black voids.
       return {
-        ceilingColor: 0x33302b,
-        ceilingEmissive: 0x000000,
-        ceilingIntensity: 0.0,
-        wallColor: new THREE.Color(0x23201d),
-        wallEmissive: 0x000000,
-        wallIntensity: 0.0,
-        floorColor: 0x181512,
+        ceilingColor: 0xc4bcae,
+        ceilingEmissive: 0xcca666,
+        ceilingIntensity: 0.25,
+        wallColor: baseWallColor.clone().multiplyScalar(0.88),
+        wallEmissive: PALETTE.glow,
+        wallIntensity: 0.05 * warmth,
+        floorColor: 0xa27c5b,
       };
     }
 
     if (office.status === "idle") {
-      // Inactive / idle occupant (> 2 min no input): soft warm dim
+      // Inactive / idle occupant (> 2 min no input): soft warm dim (~50-60%)
       return {
-        ceilingColor: 0x9e9484,
+        ceilingColor: 0xe8dcbe,
         ceilingEmissive: 0xd4a055,
-        ceilingIntensity: 0.45,
-        wallColor: baseWallColor.clone().multiplyScalar(0.55),
+        ceilingIntensity: 0.85,
+        wallColor: baseWallColor.clone().multiplyScalar(0.94),
         wallEmissive: PALETTE.glow,
-        wallIntensity: 0.12 * warmth,
-        floorColor: 0x4a3a2a,
+        wallIntensity: 0.16 * warmth,
+        floorColor: 0xad8561,
       };
     }
 

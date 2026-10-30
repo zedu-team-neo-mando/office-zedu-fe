@@ -1839,9 +1839,9 @@ export class OfficeEngine {
         }
 
         if (!status || status === "away") {
-          scale = 0.08; // unoccupied or away personal office -> dark/dim
+          scale = 0.18; // faint ambient night level (~15-20%)
         } else if (status === "idle") {
-          scale = 0.45; // inactive / idle occupant -> soft dim
+          scale = 0.55; // inactive / idle occupant (~50-60%)
         } else {
           scale = 1.0; // active occupant -> full bright
         }
@@ -1849,13 +1849,13 @@ export class OfficeEngine {
         const ceilingLamp = this.roomCeilingLamps.get(room.id);
         if (ceilingLamp) {
           if (!status || status === "away") {
-            ceilingLamp.color.setHex(0x33302b);
-            ceilingLamp.emissive.setHex(0x000000);
-            ceilingLamp.emissiveIntensity = 0.0;
+            ceilingLamp.color.setHex(0xc4bcae);
+            ceilingLamp.emissive.setHex(0xcca666);
+            ceilingLamp.emissiveIntensity = 0.25;
           } else if (status === "idle") {
-            ceilingLamp.color.setHex(0x9e9484);
+            ceilingLamp.color.setHex(0xe8dcbe);
             ceilingLamp.emissive.setHex(0xd4a055);
-            ceilingLamp.emissiveIntensity = 0.5;
+            ceilingLamp.emissiveIntensity = 0.85;
           } else {
             ceilingLamp.color.setHex(PALETTE.lightWarm);
             ceilingLamp.emissive.setHex(PALETTE.lightWarm);
