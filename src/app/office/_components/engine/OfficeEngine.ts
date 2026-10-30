@@ -5015,12 +5015,13 @@ export class OfficeEngine {
         ? tower.width * 0.82 + tower.depth * 0.58 + 10
         : framed
           ? Math.min(tower.width * 0.3, 9)
-          : tower.width * 0.62;
+          : tower.width;
     const spanHeight =
       focused === null ? height + 5 : framed ? storey + 3.5 : storey + 8;
     const distance = Math.max(
       focused === null ? 24 : framed ? 9 : 16,
-      (spanWidth / 2 / halfWidth) * 1.12,
+      (spanWidth / 2 / halfWidth) * 1.12 +
+        (focused !== null && !framed ? tower.depth / 2 : 0),
       (spanHeight / 2 / halfFov) * 1.12
     );
     // Straight-on elevation, not a three-quarter view: the facade faces the
