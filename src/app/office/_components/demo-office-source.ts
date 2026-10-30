@@ -516,6 +516,40 @@ export const demoSource: OfficeSource = {
         if (data.occupant && data.occupant.userId !== identity.id) {
           roomMap?.set(data.occupant.userId, data.occupant);
           emit();
+          if (data.type === "join") {
+            const curX =
+              latestLocalPose && latestLocalPose.roomId === roomId
+                ? latestLocalPose.x
+                : 8.5;
+            const curZ =
+              latestLocalPose && latestLocalPose.roomId === roomId
+                ? latestLocalPose.z
+                : 9.4;
+            const curYaw =
+              latestLocalPose && latestLocalPose.roomId === roomId
+                ? latestLocalPose.yaw
+                : Math.PI;
+            channel.postMessage({
+              type: "position",
+              roomId,
+              occupant: {
+                userId: identity.id,
+                displayName: identity.name,
+                username: identity.name.toLowerCase(),
+                avatar: {
+                  tint: identity.tint,
+                  body: "b",
+                  outfit: "smart",
+                  accessory: "glasses",
+                },
+                roomId,
+                status: "online",
+                position: { x: curX, y: 0, z: curZ },
+                rotation: curYaw,
+                updatedAt: new Date().toISOString(),
+              },
+            });
+          }
         }
       } else if (data.type === "leave") {
         if (data.userId) {

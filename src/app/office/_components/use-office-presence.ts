@@ -217,6 +217,7 @@ export function useOfficePresence({
         });
     };
 
+    publish();
     const timer = window.setInterval(publish, TICK_MS);
     return () => {
       window.clearInterval(timer);

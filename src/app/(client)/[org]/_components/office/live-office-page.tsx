@@ -47,7 +47,7 @@ export default function LiveOfficePage() {
     setError(null);
 
     source
-      .init(orgId, userId)
+      .init(orgId, userId, state?.user?.username)
       .then(() => {
         if (!cancelled) setReady(true);
       })
