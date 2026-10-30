@@ -304,6 +304,7 @@ export function ChatPanel({
   onSend,
   onClose,
   live = false,
+  directWith,
 }: {
   open: boolean;
   room: OfficeRoom | null;
@@ -312,6 +313,8 @@ export function ChatPanel({
   onClose: () => void;
   /** Live office rooms mirror the real Zedu conversation; the demo does not. */
   live?: boolean;
+  /** Set when the chat is a one-to-one conversation with this colleague. */
+  directWith?: string;
 }) {
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -359,14 +362,16 @@ export function ChatPanel({
           </span>
           <div className="min-w-0 flex-1">
             <p className="truncate text-[0.84rem] font-extrabold text-white">
-              {room?.name ?? "Room chat"}
+              {directWith ?? room?.name ?? "Room chat"}
             </p>
             <p className="text-[0.6rem] font-bold uppercase tracking-[0.14em] text-[#7f89a4]">
-              {room?.kind === "personal"
-                ? "DM · private office"
-                : room?.kind === "channel"
-                  ? "Existing channel messages"
-                  : "Room chat"}
+              {directWith
+                ? "Direct message"
+                : room?.kind === "personal"
+                  ? "DM · private office"
+                  : room?.kind === "channel"
+                    ? "Existing channel messages"
+                    : "Room chat"}
             </p>
           </div>
           <span className="hidden items-center gap-1 rounded-full border border-[#34d399]/20 bg-[#34d399]/10 px-2 py-1 text-[0.55rem] font-extrabold uppercase tracking-wider text-[#86efac] sm:flex">
@@ -383,7 +388,7 @@ export function ChatPanel({
           </button>
         </div>
 
-        {room && room.chat ? (
+        {directWith || (room && room.chat) ? (
           <>
             <div
               ref={listRef}
@@ -391,14 +396,18 @@ export function ChatPanel({
             >
               <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2 text-[0.64rem] leading-relaxed text-[#8f98b2]">
                 <p className="font-bold text-[#c9cfe4]">
-                  Same conversation, new room.
+                  {directWith
+                    ? `Talking with ${directWith}.`
+                    : "Same conversation, new room."}
                 </p>
                 <p className="mt-0.5">
-                  {room.kind === "personal"
-                    ? "This is the DM with the office owner. Guests read along; the owner furnishes."
-                    : live
-                      ? `This is the real ${room.name} channel. New messages appear here as they are sent.`
-                      : `Messages here are the existing ${room.name} messages, filtered to this room.`}
+                  {directWith
+                    ? "Only the two of you see this conversation."
+                    : room?.kind === "personal"
+                      ? "This is the DM with the office owner. Guests read along; the owner furnishes."
+                      : live
+                        ? `This is the real ${room?.name} channel. New messages appear here as they are sent.`
+                        : `Messages here are the existing ${room?.name} messages, filtered to this room.`}
                 </p>
               </div>
               {messages.map((message) => (
@@ -419,9 +428,11 @@ export function ChatPanel({
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
-                    room.kind === "personal"
-                      ? "Message the office owner…"
-                      : `Message ${room.name}…`
+                    directWith
+                      ? `Message ${directWith}…`
+                      : room?.kind === "personal"
+                        ? "Message the office owner…"
+                        : `Message ${room?.name}…`
                   }
                   className="h-8 flex-1 bg-transparent text-[0.8rem] font-medium text-white placeholder:text-[#667089] focus:outline-none"
                 />

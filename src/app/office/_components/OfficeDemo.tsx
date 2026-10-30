@@ -378,6 +378,10 @@ export default function OfficeDemo({
     Record<string, ChatMessage[]>
   >(() => ({ ...source.initialMessages }));
   const [unread, setUnread] = useState(0);
+  /** The colleague a direct chat is open with, picked by clicking them. */
+  const [dmPeer, setDmPeer] = useState<{ id: string; name: string } | null>(
+    null
+  );
   const [saveState, setSaveState] = useState<"saved" | "saving" | "draft">(
     "saved"
   );
@@ -593,6 +597,7 @@ export default function OfficeDemo({
           onTowerPick: (office) => handlersRef.current?.onTowerPick?.(office),
           onTowerHover: (office) => handlersRef.current?.onTowerHover?.(office),
           onFloorChange: (floorIndex) => setActiveFloor(floorIndex),
+          onAvatarPick: (person) => handlersRef.current?.onAvatarPick?.(person),
         },
         {
           isMobile: mobile,
@@ -1019,7 +1024,17 @@ export default function OfficeDemo({
       if (room.some((entry) => entry.id === message.id)) return previous;
       return { ...previous, [message.roomId]: [...room, message] };
     });
-    if (!stateRef.current.chatOpen) setUnread((value) => value + 1);
+    if (message.roomId.startsWith("dm:")) {
+      // A direct message: open that conversation if no chat is showing,
+      // otherwise let the person know without pulling them away.
+      if (!stateRef.current.chatOpen) {
+        setDmPeer({ id: message.userId, name: message.name });
+        setUnread((value) => value + 1);
+      }
+      showInfo(`${message.name} messaged you`, message.text.slice(0, 80));
+    } else if (!stateRef.current.chatOpen) {
+      setUnread((value) => value + 1);
+    }
     // Whoever is standing here says it out loud; showBubble ignores anyone
     // without a rig, so a message from an empty room stays silent.
     engineRef.current?.showBubble(message.userId, message.text);
@@ -1028,12 +1043,12 @@ export default function OfficeDemo({
   // The room you are in and the office you are reading from the street are
   // usually different rooms, so they carry separate subscriptions.
   useEffect(() => {
-    if (source.mode !== "live" || phase !== "office" || !roomId) return;
+    if (phase !== "office" || !roomId) return;
     return source.subscribeMessages(roomId, ingestLiveMessage);
   }, [source, phase, roomId, ingestLiveMessage]);
 
   useEffect(() => {
-    if (source.mode !== "live" || !towerPreview) return;
+    if (!towerPreview) return;
     return source.subscribeMessages(towerPreview, ingestLiveMessage);
   }, [source, towerPreview, ingestLiveMessage]);
 
@@ -1277,7 +1292,84 @@ export default function OfficeDemo({
       setChatOpen(true);
     },
     onTowerHover: (office) => setTowerHover(office),
+    onAvatarPick: (person) => openDirectChat(person),
   };
+
+  /** Clicking a colleague opens a one-to-one conversation with them. */
+  function openDirectChat(person: { id: string; name: string }) {
+    if (stateRef.current.editorActive) closeEditor();
+    setDmPeer(person);
+    setChatOpen(true);
+    setUnread(0);
+
+    const key = `dm:${person.id}`;
+    if (source.mode !== "live" || historyRef.current.has(key)) return;
+    historyRef.current.add(key);
+    // The direct chat is the same DM the 2D app shows, so its history is the
+    // conversation behind that colleague's private office.
+    source
+      .fetchMessages(`personal:${person.id}`)
+      .then((messages) => {
+        if (!messages.length) return;
+        setMessagesByRoom((previous) => {
+          const local = previous[key] ?? [];
+          const fetched = messages.map((entry) => ({ ...entry, roomId: key }));
+          const ids = new Set(fetched.map((entry) => entry.id));
+          return {
+            ...previous,
+            [key]: [
+              ...fetched,
+              ...local.filter((entry) => !ids.has(entry.id)),
+            ].sort((a, b) => a.at - b.at),
+          };
+        });
+      })
+      .catch(() => {
+        historyRef.current.delete(key);
+      });
+  }
+
+  function sendDirectChat(text: string, peer: { id: string; name: string }) {
+    const key = `dm:${peer.id}`;
+    appendMessage({
+      id: `me-${Date.now()}`,
+      roomId: key,
+      userId: selfId,
+      name: selfName,
+      text,
+      at: Date.now(),
+      self: true,
+    });
+    engineRef.current?.showBubble("you", text);
+
+    const fromRoom = stateRef.current.roomId;
+    if (!fromRoom) return;
+    void source.sendDirectMessage?.(fromRoom, peer.id, text).catch(() => {
+      showError("Message not sent", "Check your connection and try again.");
+    });
+
+    // The seeded demo teammates are not real people, so they answer for
+    // themselves the way they do in room chat.
+    const seeded = DEMO_USERS.find((user) => user.id === peer.id);
+    if (source.mode === "demo" && seeded) {
+      const reply =
+        REPLIES.default[Math.floor(Math.random() * REPLIES.default.length)];
+      schedule(
+        () => {
+          appendMessage({
+            id: `reply-${Date.now()}`,
+            roomId: key,
+            userId: seeded.id,
+            name: seeded.name,
+            text: reply,
+            at: Date.now(),
+          });
+          engineRef.current?.showBubble(seeded.id, reply);
+        },
+        1100 + Math.random() * 800
+      );
+    }
+  }
 
   function recordHistory(roomKey: string) {
     const snapshot = (stateRef.current.layouts[roomKey] ?? []).map((item) => ({
@@ -1661,7 +1753,8 @@ export default function OfficeDemo({
   function toggleChat() {
     const state = stateRef.current;
     const room = state.roomId ? roomById[state.roomId] : null;
-    if (!state.chatOpen && (!room || !room.chat)) {
+    if (state.chatOpen) setDmPeer(null);
+    if (!state.chatOpen && !dmPeer && (!room || !room.chat)) {
       showInfo("No chat here", "Walk into a channel room or a private office.");
       return;
     }
@@ -1702,6 +1795,8 @@ export default function OfficeDemo({
       });
       return;
     }
+
+    void source.sendMessage(room.id, text).catch(() => {});
 
     const responder =
       DEMO_USERS.find(
@@ -2020,9 +2115,19 @@ export default function OfficeDemo({
           <ChatPanel
             open={chatOpen}
             room={currentRoom}
-            messages={currentMessages}
-            onSend={sendChat}
-            onClose={() => setChatOpen(false)}
+            messages={
+              dmPeer
+                ? (messagesByRoom[`dm:${dmPeer.id}`] ?? [])
+                : currentMessages
+            }
+            directWith={dmPeer?.name}
+            onSend={(text) =>
+              dmPeer ? sendDirectChat(text, dmPeer) : sendChat(text)
+            }
+            onClose={() => {
+              setChatOpen(false);
+              setDmPeer(null);
+            }}
             live={source.mode === "live"}
           />
 

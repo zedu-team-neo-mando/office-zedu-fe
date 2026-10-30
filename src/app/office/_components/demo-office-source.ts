@@ -377,6 +377,22 @@ export const demoSource: OfficeSource = {
   },
 
   async sendMessage(roomId, text) {
+    const channel = getDemoChannel();
+    if (channel && typeof window !== "undefined") {
+      const identity = getDemoIdentity();
+      channel.postMessage({
+        type: "chat",
+        roomId,
+        message: {
+          id: `demo-msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          roomId,
+          userId: identity.id,
+          name: identity.name,
+          text,
+          at: Date.now(),
+        },
+      });
+    }
     const reply: OfficeChatMessage = {
       id: `demo-reply-${Date.now()}`,
       roomId,
@@ -386,6 +402,25 @@ export const demoSource: OfficeSource = {
       at: Date.now(),
     };
     return [reply];
+  },
+
+  async sendDirectMessage(roomId: string, toUserId: string, text: string) {
+    const channel = getDemoChannel();
+    if (!channel || typeof window === "undefined") return;
+    const identity = getDemoIdentity();
+    channel.postMessage({
+      type: "chat",
+      roomId,
+      message: {
+        id: `demo-dm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        roomId,
+        toUserId,
+        userId: identity.id,
+        name: identity.name,
+        text,
+        at: Date.now(),
+      },
+    });
   },
 
   async askZoe(question: string, context: OfficeZoeContext) {
@@ -610,10 +645,33 @@ export const demoSource: OfficeSource = {
   },
 
   subscribeMessages(
-    _roomId: string,
-    _onMessage: (message: OfficeChatMessage) => void
+    roomId: string,
+    onMessage: (message: OfficeChatMessage) => void
   ) {
-    return () => {};
+    const channel = getDemoChannel();
+    if (!channel || typeof window === "undefined") {
+      return () => {};
+    }
+    const identity = getDemoIdentity();
+    const handler = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || data.type !== "chat" || data.roomId !== roomId) return;
+      const msg = data.message as
+        | (OfficeChatMessage & { toUserId?: string })
+        | undefined;
+      if (!msg || msg.userId === identity.id) return;
+      if (msg.toUserId && msg.toUserId !== identity.id) return;
+      const { toUserId, ...rest } = msg;
+      onMessage({
+        ...rest,
+        roomId: toUserId ? `dm:${msg.userId}` : rest.roomId,
+        self: false,
+      });
+    };
+    channel.addEventListener("message", handler);
+    return () => {
+      channel.removeEventListener("message", handler);
+    };
   },
 };
 

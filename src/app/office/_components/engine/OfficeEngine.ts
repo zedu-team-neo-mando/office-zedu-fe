@@ -47,6 +47,8 @@ export interface EngineCallbacks {
   onTowerHover?: (office: TowerOffice | null) => void;
   /** The floor the 3D interior is showing changed. */
   onFloorChange?: (floorIndex: number) => void;
+  /** Another person's avatar (or the name above it) was clicked. */
+  onAvatarPick?: (person: { id: string; name: string }) => void;
 }
 
 export interface EditState {
@@ -1056,6 +1058,8 @@ export class OfficeEngine {
         rig.targetYaw = yaw;
       }
 
+      rig.group.userData.personId = occ.userId;
+      rig.group.userData.personName = occ.displayName || occ.username;
       this.updateRigStatus(rig, occ.status);
       next.set(occ.userId, rig);
     }
@@ -2389,6 +2393,8 @@ export class OfficeEngine {
       );
       rig.group.position.set(user.position.x, 0, user.position.z);
       rig.group.rotation.y = Math.random() * Math.PI * 2;
+      rig.group.userData.personId = user.id;
+      rig.group.userData.personName = user.name;
       this.avatarGroup.add(rig.group);
       this.agents.push({
         rig,
@@ -3578,6 +3584,7 @@ export class OfficeEngine {
     const sprite = new THREE.Sprite(material);
     sprite.scale.set(2.1, 0.59, 1);
     sprite.renderOrder = 10;
+    sprite.userData.nameplate = true;
     return sprite;
   }
 
@@ -4083,6 +4090,28 @@ export class OfficeEngine {
 
   // ------------------------------------------------------------------ seats
 
+  /** The name box above another person's avatar under the pointer, if any. */
+  private personUnderPointer(): { id: string; name: string } | null {
+    const hits = this.raycaster.intersectObjects(
+      this.avatarGroup.children,
+      true
+    );
+    for (const hit of hits) {
+      // Only the nameplate opens a chat; the body itself stays click-through
+      // so walking up to someone still works.
+      if (!hit.object.userData.nameplate) continue;
+      let node: THREE.Object3D | null = hit.object;
+      while (node && node.userData.personId === undefined) {
+        node = node.parent;
+      }
+      if (!node) continue;
+      const id = String(node.userData.personId);
+      if (id === this.selfId || id === "you") continue;
+      return { id, name: String(node.userData.personName ?? "Colleague") };
+    }
+    return null;
+  }
+
   /** The chair, sofa, armchair or bean bag under the pointer, if any. */
   private seatUnderPointer(): THREE.Object3D | null {
     const hits = this.raycaster.intersectObjects(
@@ -4330,6 +4359,11 @@ export class OfficeEngine {
     if (this.cinematic) return;
 
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const person = this.personUnderPointer();
+    if (person) {
+      this.callbacks.onAvatarPick?.(person);
+      return;
+    }
     const seat = this.seatUnderPointer();
     if (seat) {
       if (!this.walkToSeat(seat)) this.callbacks.onInvalidTarget();

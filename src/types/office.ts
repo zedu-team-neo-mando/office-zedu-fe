@@ -193,6 +193,16 @@ export interface OfficeSource {
   resetLayout(roomId: string): Promise<OfficeFurnitureItem[]>;
   saveAvatar(avatar: OfficeAvatarConfig): Promise<void>;
   sendMessage(roomId: string, text: string): Promise<OfficeChatMessage[]>;
+  /**
+   * Sends a one-to-one message to a colleague standing in the same room.
+   * The recipient receives it through `subscribeMessages` with a room id of
+   * `dm:<senderId>`.
+   */
+  sendDirectMessage?(
+    roomId: string,
+    toUserId: string,
+    text: string
+  ): Promise<void>;
   askZoe(question: string, context: OfficeZoeContext): Promise<string>;
   enterRoom(roomId: string): Promise<void>;
   leaveRoom(roomId: string): Promise<void>;

@@ -338,9 +338,8 @@ function buildRooms(apiRooms: OfficeApiRoom[]): OfficeRoom[] {
       refId: room.refId,
       capacity: room.capacity || template.capacity,
       locked: Boolean(room.isLocked),
-      // Only a channel or a DM-backed private office has a conversation.
-      // Shared spaces keep their 2D description instead of an empty chat.
-      chat: room.kind === "channel" || room.kind === "personal",
+      // Every room except quiet focus booths supports live room or channel chat.
+      chat: room.kind !== "focus",
       description: template.description,
       ownerId: room.refId,
       floorIndex: room.floorIndex ?? 0,
@@ -553,13 +552,64 @@ export class LiveOfficeSource implements OfficeSource {
     roomId: string,
     text: string
   ): Promise<OfficeChatMessage[]> {
-    const channelId = this.channelIdForRoom(roomId);
+    // The office posts through the same endpoints the 2D chat uses when the
+    // room is backed by a channel or 1:1 DM, and also broadcasts over the
+    // room's realtime channel so anyone standing in the room hears it straight
+    // away (including in shared spaces like Reception, Lounge, or Meeting
+    // rooms, or when standing inside one's own office with a visitor).
+    const threadId = crypto.randomUUID();
+    const roomChannel = presenceChannel(
+      this.orgId,
+      this.floorByRoom[roomId] ?? 0,
+      roomId
+    );
+    const activeSub =
+      this.presenceSubscription &&
+      this.presenceRoomId === roomId &&
+      this.presenceSubscription.state === "subscribed"
+        ? this.presenceSubscription
+        : null;
+
+    if (activeSub) {
+      activeSub
+        .publish({
+          type: "chat",
+          message: {
+            id: threadId,
+            roomId,
+            userId: this.userId,
+            name: this.selfName,
+            text,
+            at: Date.now(),
+          },
+        })
+        .catch(() => {});
+    } else {
+      const client = getSharedCentrifuge();
+      const tempSub = prepareChannelSubscription(client, roomChannel, {
+        getToken: () => getSubscriptionToken(roomChannel),
+      });
+      tempSub.subscribe();
+      tempSub
+        .publish({
+          type: "chat",
+          message: {
+            id: threadId,
+            roomId,
+            userId: this.userId,
+            name: this.selfName,
+            text,
+            at: Date.now(),
+          },
+        })
+        .catch(() => {});
+    }
+
+    const channelId =
+      this.channelIdForRoom(roomId) ??
+      (await this.resolveChannelIdForRoom(roomId));
     if (!channelId) return [];
 
-    // The office posts through the same endpoints the 2D chat uses. A new
-    // top-level message is a new thread; replying to an existing thread is a
-    // different route, which the office does not need.
-    const threadId = crypto.randomUUID();
     const payload = {
       content: text,
       thread_id: threadId,
@@ -579,6 +629,46 @@ export class LiveOfficeSource implements OfficeSource {
     }
 
     return [];
+  }
+
+  async sendDirectMessage(roomId: string, toUserId: string, text: string) {
+    const threadId = crypto.randomUUID();
+    const subscription = this.presenceSubscription;
+    // Delivered live over the room both people are standing in…
+    if (
+      subscription &&
+      this.presenceRoomId === roomId &&
+      subscription.state === "subscribed"
+    ) {
+      subscription
+        .publish({
+          type: "chat",
+          message: {
+            id: threadId,
+            roomId,
+            toUserId,
+            userId: this.userId,
+            name: this.selfName,
+            text,
+            at: Date.now(),
+          },
+        })
+        .catch(() => {});
+    }
+
+    // …and kept in the real 1:1 DM so it is also in the 2D chat.
+    const channelId = await this.resolveChannelIdForRoom(
+      `personal:${toUserId}`
+    );
+    if (!channelId) return;
+    unwrap(
+      await PostRequest(`/dms/channels/${channelId}/threads`, {
+        content: text,
+        thread_id: threadId,
+        media: [],
+      }),
+      "The message was not sent."
+    );
   }
 
   async askZoe(question: string, context: OfficeZoeContext) {
@@ -909,7 +999,9 @@ export class LiveOfficeSource implements OfficeSource {
     const room = this.rooms.find((candidate) => candidate.id === roomId);
     // A locked office is visible in the tower but its conversation is not.
     if (room?.locked) return [];
-    const channelId = this.channelIdForRoom(roomId);
+    const channelId =
+      this.channelIdForRoom(roomId) ??
+      (await this.resolveChannelIdForRoom(roomId));
     if (!channelId) return [];
 
     // The office reads the conversation the 2D chat already draws: channel
@@ -935,30 +1027,84 @@ export class LiveOfficeSource implements OfficeSource {
   ): () => void {
     const room = this.rooms.find((candidate) => candidate.id === roomId);
     if (room?.locked) return () => {};
-    const channelId = this.channelIdForRoom(roomId);
-    if (!channelId) return () => {};
 
-    // New messages land on the raw backend channel id, the same name the 2D
-    // chat subscribes to — there is no office-scoped chat channel to join.
     const client = getSharedCentrifuge();
-    const subscription = prepareChannelSubscription(client, channelId, {
-      getToken: () => getSubscriptionToken(channelId),
+    let cancelled = false;
+    const cleanups: Array<() => void> = [];
+
+    // Subscribe to the room's realtime channel so messages sent by anyone in
+    // the room arrive immediately even in shared rooms or self-offices.
+    const roomChannel = presenceChannel(
+      this.orgId,
+      this.floorByRoom[roomId] ?? 0,
+      roomId
+    );
+    const roomSub = prepareChannelSubscription(client, roomChannel, {
+      getToken: () => getSubscriptionToken(roomChannel),
+    });
+    const onRoomPublication = (ctx: any) => {
+      if (ctx?.data?.type !== "chat") return;
+      const raw = ctx.data.message;
+      if (!raw || typeof raw.text !== "string") return;
+      if (raw.userId && raw.userId === this.userId) return;
+      // A direct message travels over the room channel too; only the person
+      // it is addressed to keeps it, and it lands in their direct chat.
+      const toUserId = raw.toUserId ? String(raw.toUserId) : null;
+      if (toUserId && toUserId !== this.userId) return;
+      onMessage({
+        id: String(raw.id ?? `room-msg-${Date.now()}`),
+        roomId: toUserId ? `dm:${String(raw.userId)}` : roomId,
+        userId: String(raw.userId ?? "colleague"),
+        name: String(raw.name ?? "Teammate"),
+        text: raw.text,
+        at: typeof raw.at === "number" ? raw.at : Date.now(),
+        self: false,
+      });
+    };
+    roomSub.on("publication", onRoomPublication);
+    roomSub.subscribe();
+    cleanups.push(() => {
+      roomSub.off("publication", onRoomPublication);
+      releaseChannelSubscription(client, roomChannel, roomSub);
     });
 
-    const onPublication = (ctx: any) => {
-      if (ctx?.data?.type !== "message") return;
-      const message = toOfficeMessage(roomId, ctx.data, this.userId);
-      // sendChat already drew our own message, so its echo would double it.
-      if (!message || message.self) return;
-      onMessage(message);
+    const attachBackendChannel = (channelId: string) => {
+      if (cancelled) return;
+      // New messages land on the raw backend channel id, the same name the 2D
+      // chat subscribes to — there is no office-scoped chat channel to join.
+      const subscription = prepareChannelSubscription(client, channelId, {
+        getToken: () => getSubscriptionToken(channelId),
+      });
+
+      const onPublication = (ctx: any) => {
+        if (ctx?.data?.type !== "message") return;
+        const message = toOfficeMessage(roomId, ctx.data, this.userId);
+        // sendChat already drew our own message, so its echo would double it.
+        if (!message || message.self) return;
+        onMessage(message);
+      };
+
+      subscription.on("publication", onPublication);
+      subscription.subscribe();
+
+      cleanups.push(() => {
+        subscription.off("publication", onPublication);
+        releaseChannelSubscription(client, channelId, subscription);
+      });
     };
 
-    subscription.on("publication", onPublication);
-    subscription.subscribe();
+    const immediateChannelId = this.channelIdForRoom(roomId);
+    if (immediateChannelId) {
+      attachBackendChannel(immediateChannelId);
+    } else if (roomId.startsWith("personal:")) {
+      void this.resolveChannelIdForRoom(roomId).then((resolved) => {
+        if (resolved) attachBackendChannel(resolved);
+      });
+    }
 
     return () => {
-      subscription.off("publication", onPublication);
-      releaseChannelSubscription(client, channelId, subscription);
+      cancelled = true;
+      for (const fn of cleanups) fn();
     };
   }
 
@@ -969,6 +1115,37 @@ export class LiveOfficeSource implements OfficeSource {
     }
     if (roomId.startsWith("personal:")) {
       return this.dmRoomMap[roomId] ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * Lazily resolves or creates the 1:1 DM channel for a personal office when
+   * it was not yet present in the initial bootstrap map.
+   */
+  private async resolveChannelIdForRoom(
+    roomId: string
+  ): Promise<string | null> {
+    const existing = this.channelIdForRoom(roomId);
+    if (existing) return existing;
+    if (!roomId.startsWith("personal:")) return null;
+
+    const targetUserId = roomId.slice("personal:".length);
+    if (!targetUserId || targetUserId === this.userId) return null;
+
+    try {
+      const response = await PostRequest(`/organisations/${this.orgId}/dms`, {
+        chat_type: "user",
+        participant_id: targetUserId,
+      });
+      const data = response?.data?.data ?? response?.data;
+      const channelId = data?.channel_id ?? data?.channelId ?? data?.id ?? null;
+      if (typeof channelId === "string" && channelId.length > 0) {
+        this.dmRoomMap[roomId] = channelId;
+        return channelId;
+      }
+    } catch {
+      // Room chat still travels over the room's realtime channel.
     }
     return null;
   }
