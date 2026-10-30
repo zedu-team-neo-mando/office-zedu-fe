@@ -339,8 +339,17 @@ export default function OfficeDemo({
   const openedInitialTowerRef = useRef(false);
   const [activeFloor, setActiveFloor] = useState(0);
   const floorRooms = useMemo(
-    () => rooms.filter((room) => (room.floorIndex ?? 0) === activeFloor),
-    [rooms, activeFloor]
+    () =>
+      source.mode === "demo" && activeFloor === 0
+        ? rooms.filter(
+            (room) =>
+              (room.floorIndex ?? 0) === 0 ||
+              room.id === "personal:ada" ||
+              room.id === "personal:tunde" ||
+              room.id === "personal:you"
+          )
+        : rooms.filter((room) => (room.floorIndex ?? 0) === activeFloor),
+    [rooms, activeFloor, source.mode]
   );
   const findRoomAt = useCallback(
     (x: number, z: number) =>
