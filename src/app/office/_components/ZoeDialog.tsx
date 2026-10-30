@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Sparkles, Square, X } from "lucide-react";
+import { ArrowUp, RotateCcw, Sparkles, Square, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,8 @@ interface ZoeMessage {
   role: "assistant" | "user";
   content: string;
   streaming?: boolean;
+  error?: boolean;
+  originalPrompt?: string;
 }
 
 export default function ZoeDialog({
@@ -133,10 +135,85 @@ export default function ZoeDialog({
               : "Zoe could not answer that right now.";
           setMessages((prev) => [
             ...prev,
-            { id: answerId, role: "assistant", content: message },
+            {
+              id: answerId,
+              role: "assistant",
+              content: message,
+              error: true,
+              originalPrompt: text,
+            },
           ]);
         });
     }, 700);
+  };
+
+  const retry = (prompt: string) => {
+    if (!prompt || thinking || streaming) return;
+    const answerId = `z-${Date.now()}`;
+
+    setMessages((prev) =>
+      prev.filter(
+        (message) =>
+          !(
+            message.role === "assistant" &&
+            message.error &&
+            message.originalPrompt === prompt
+          )
+      )
+    );
+    setThinking(true);
+
+    ask(prompt)
+      .then((answer) => {
+        setMessages((prev) => [
+          ...prev,
+          { id: answerId, role: "assistant", content: "", streaming: true },
+        ]);
+        setStreaming(true);
+
+        let index = 0;
+        timerRef.current = window.setInterval(() => {
+          index = Math.min(answer.length, index + 3);
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === answerId
+                ? { ...message, content: answer.slice(0, index) }
+                : message
+            )
+          );
+          if (index >= answer.length) {
+            if (timerRef.current) window.clearInterval(timerRef.current);
+            timerRef.current = null;
+            setStreaming(false);
+            setMessages((prev) =>
+              prev.map((message) =>
+                message.id === answerId
+                  ? { ...message, streaming: false }
+                  : message
+              )
+            );
+          }
+        }, 16);
+      })
+      .catch((error: unknown) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Zoe could not answer that right now.";
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: answerId,
+            role: "assistant",
+            content: message,
+            error: true,
+            originalPrompt: prompt,
+          },
+        ]);
+      })
+      .finally(() => {
+        setThinking(false);
+      });
   };
 
   return (
@@ -202,17 +279,32 @@ export default function ZoeDialog({
                   Z
                 </span>
               )}
-              <div
-                className={
-                  message.role === "user"
-                    ? "max-w-[85%] rounded-2xl rounded-br-md bg-gradient-to-br from-[#8b5cf6] to-[#6d4aff] px-3.5 py-2.5 text-[0.82rem] font-medium leading-relaxed text-white"
-                    : "max-w-[88%] whitespace-pre-wrap rounded-2xl rounded-tl-md border border-white/8 bg-white/[0.045] px-3.5 py-2.5 text-[0.82rem] font-medium leading-relaxed text-[#e6e9f6]"
-                }
-              >
-                {message.content}
-                {message.streaming && (
-                  <span className="office-blink ml-0.5 inline-block h-3.5 w-1 rounded-sm bg-[#f4c46a] align-middle" />
-                )}
+              <div className="flex max-w-[88%] flex-col gap-1.5">
+                <div
+                  className={
+                    message.role === "user"
+                      ? "max-w-[85%] rounded-2xl rounded-br-md bg-gradient-to-br from-[#8b5cf6] to-[#6d4aff] px-3.5 py-2.5 text-[0.82rem] font-medium leading-relaxed text-white"
+                      : "whitespace-pre-wrap rounded-2xl rounded-tl-md border border-white/8 bg-white/[0.045] px-3.5 py-2.5 text-[0.82rem] font-medium leading-relaxed text-[#e6e9f6]"
+                  }
+                >
+                  {message.content}
+                  {message.streaming && (
+                    <span className="office-blink ml-0.5 inline-block h-3.5 w-1 rounded-sm bg-[#f4c46a] align-middle" />
+                  )}
+                </div>
+                {message.role === "assistant" &&
+                  message.error &&
+                  message.originalPrompt && (
+                    <button
+                      type="button"
+                      onClick={() => retry(message.originalPrompt!)}
+                      disabled={thinking || streaming}
+                      className="flex w-fit items-center gap-1.5 rounded-lg border border-rose-400/30 bg-rose-400/10 px-2.5 py-1 text-[0.68rem] font-bold text-rose-300 transition-opacity disabled:opacity-40"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      Retry
+                    </button>
+                  )}
               </div>
             </div>
           ))}
