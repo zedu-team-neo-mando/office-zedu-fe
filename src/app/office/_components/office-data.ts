@@ -97,6 +97,7 @@ export interface ChatMessage {
   text: string;
   at: number;
   self?: boolean;
+  system?: boolean;
 }
 
 export const BUILDING = {

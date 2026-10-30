@@ -197,6 +197,7 @@ function toOfficeMessage(
     text,
     at: Number.isNaN(at) ? Date.now() : at,
     self: row.user_id === selfId,
+    system: row.type === "system",
   };
 }
 

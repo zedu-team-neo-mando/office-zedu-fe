@@ -10,6 +10,7 @@ import {
   CircleDot,
   DoorOpen,
   Flower2,
+  Info,
   Lamp,
   Layers,
   Loader2,
@@ -524,6 +525,23 @@ export function ChatPanel({
 }
 
 function ChatRow({ message }: { message: ChatMessage }) {
+  if (message.system) {
+    return (
+      <div className="flex items-center gap-2 px-1 py-0.5">
+        <Info
+          aria-hidden="true"
+          className="h-3.5 w-3.5 shrink-0 text-[#7f89a4]"
+        />
+        <p className="min-w-0 flex-1 text-[0.72rem] font-medium leading-relaxed text-[#8f98b2]">
+          {message.text}
+        </p>
+        <span className="shrink-0 whitespace-nowrap text-[0.55rem] font-semibold uppercase tracking-wider text-[#5f6880]">
+          {formatTime(message.at)}
+        </span>
+      </div>
+    );
+  }
+
   if (message.self) {
     return (
       <div className="flex justify-end">
