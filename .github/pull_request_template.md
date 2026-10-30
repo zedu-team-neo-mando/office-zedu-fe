@@ -1,9 +1,10 @@
 ## Ticket
 
-<!-- Link the approved ClickUp/Linear ticket. -->
+<!-- Link the GitHub issue this PR solves. "Closes #N" closes it automatically on merge. -->
 
 - **Ticket ID:** <!-- e.g. CHAT-142 -->
 - **Ticket title:**
+- Closes #
 
 ## Team lead
 

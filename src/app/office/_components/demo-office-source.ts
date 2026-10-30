@@ -15,6 +15,7 @@ import type {
   OfficeFloor,
   OfficeFurnitureItem,
   OfficeOccupant,
+  OfficePresenceState,
   OfficePresenceStatus,
   OfficeRoom,
   OfficeSource,
@@ -210,6 +211,78 @@ export function demoTowerOffices(
   return offices;
 }
 
+const DEMO_CHANNEL_NAME = "zedu_office_demo_multiplayer";
+
+let demoBroadcastChannel: BroadcastChannel | null = null;
+function getDemoChannel(): BroadcastChannel | null {
+  if (
+    typeof window === "undefined" ||
+    typeof BroadcastChannel === "undefined"
+  ) {
+    return null;
+  }
+  if (!demoBroadcastChannel) {
+    try {
+      demoBroadcastChannel = new BroadcastChannel(DEMO_CHANNEL_NAME);
+    } catch {
+      demoBroadcastChannel = null;
+    }
+  }
+  return demoBroadcastChannel;
+}
+
+const demoRoomOccupants = new Map<string, Map<string, OfficeOccupant>>();
+
+function getDemoIdentity() {
+  if (typeof window === "undefined") {
+    return { id: "demo_player", name: "Colleague", tint: "#8b5cf6" };
+  }
+  const w = window as any;
+  if (w.__officeTabIdentity) {
+    return w.__officeTabIdentity;
+  }
+  const id = `demo_${Math.random().toString(36).slice(2, 8)}`;
+  const names = [
+    "Alex",
+    "Jordan",
+    "Taylor",
+    "Casey",
+    "Morgan",
+    "Sam",
+    "Kai",
+    "Riley",
+    "Quinn",
+    "Avery",
+  ];
+  const name = names[Math.floor(Math.random() * names.length)];
+  const tints = [
+    "#8b5cf6",
+    "#3b82f6",
+    "#10b981",
+    "#f59e0b",
+    "#ec4899",
+    "#06b6d4",
+  ];
+  const tint = tints[Math.floor(Math.random() * tints.length)];
+  const identity = { id, name, tint };
+  w.__officeTabIdentity = identity;
+  try {
+    sessionStorage.setItem("office_session_user_id", id);
+    sessionStorage.setItem("office_session_user_name", name);
+    sessionStorage.setItem("office_session_user_tint", tint);
+  } catch {
+    // Ignore storage issues in restricted environments
+  }
+  return identity;
+}
+
+let latestLocalPose: {
+  roomId: string;
+  x: number;
+  z: number;
+  yaw: number;
+} | null = null;
+
 /** The demo lives entirely in the browser: seeded data plus localStorage. */
 export const demoSource: OfficeSource = {
   mode: "demo",
@@ -323,28 +396,211 @@ export const demoSource: OfficeSource = {
     return `${base}\n\nNearby right now: ${nearby}.`;
   },
 
-  async enterRoom() {
-    // The demo has no server to tell.
+  async enterRoom(roomId: string) {
+    const channel = getDemoChannel();
+    if (!channel || typeof window === "undefined") return;
+
+    const identity = getDemoIdentity();
+    const spawnPos =
+      latestLocalPose && latestLocalPose.roomId === roomId
+        ? { x: latestLocalPose.x, z: latestLocalPose.z }
+        : { x: 8.5, z: 9.4 };
+
+    const occupant: OfficeOccupant = {
+      userId: identity.id,
+      displayName: identity.name,
+      username: identity.name.toLowerCase(),
+      avatar: {
+        tint: identity.tint,
+        body: "b",
+        outfit: "smart",
+        accessory: "glasses",
+      },
+      roomId,
+      status: "online",
+      position: { x: spawnPos.x, y: 0, z: spawnPos.z },
+      rotation: latestLocalPose?.yaw ?? Math.PI,
+      updatedAt: new Date().toISOString(),
+    };
+
+    channel.postMessage({
+      type: "join",
+      roomId,
+      occupant,
+    });
   },
 
-  async leaveRoom() {
-    // The demo has no server to tell.
+  async leaveRoom(roomId: string) {
+    const channel = getDemoChannel();
+    if (!channel || typeof window === "undefined") return;
+
+    const identity = getDemoIdentity();
+    channel.postMessage({
+      type: "leave",
+      roomId,
+      userId: identity.id,
+    });
   },
 
-  async sendPosition() {
-    // The demo has no server to tell, so the pose stays local.
+  async sendPosition(roomId: string, x: number, z: number, yaw: number) {
+    const channel = getDemoChannel();
+    if (!channel || typeof window === "undefined") return 200;
+
+    const identity = getDemoIdentity();
+    latestLocalPose = { roomId, x, z, yaw };
+
+    const occupant: OfficeOccupant = {
+      userId: identity.id,
+      displayName: identity.name,
+      username: identity.name.toLowerCase(),
+      avatar: {
+        tint: identity.tint,
+        body: "b",
+        outfit: "smart",
+        accessory: "glasses",
+      },
+      roomId,
+      status: "online",
+      position: { x, y: 0, z },
+      rotation: yaw,
+      updatedAt: new Date().toISOString(),
+    };
+
+    channel.postMessage({
+      type: "position",
+      roomId,
+      occupant,
+    });
     return 200;
   },
 
-  async fetchOccupants(_roomId: string): Promise<OfficeOccupant[]> {
-    return [];
+  async fetchOccupants(roomId: string): Promise<OfficeOccupant[]> {
+    const roomMap = demoRoomOccupants.get(roomId);
+    if (!roomMap) return [];
+    const identity = getDemoIdentity();
+    return [...roomMap.values()].filter((occ) => occ.userId !== identity.id);
   },
 
   subscribePresence(
-    _roomId: string,
-    _onPresence: (occupants: OfficeOccupant[]) => void
+    roomId: string,
+    onPresence: (occupants: OfficeOccupant[]) => void,
+    onState?: (state: OfficePresenceState) => void
   ) {
-    return () => {};
+    const channel = getDemoChannel();
+    if (!channel || typeof window === "undefined") {
+      onState?.("live");
+      onPresence([]);
+      return () => {};
+    }
+
+    let roomMap = demoRoomOccupants.get(roomId);
+    if (!roomMap) {
+      roomMap = new Map<string, OfficeOccupant>();
+      demoRoomOccupants.set(roomId, roomMap);
+    }
+
+    const identity = getDemoIdentity();
+
+    const emit = () => {
+      const others = [...(roomMap?.values() ?? [])].filter(
+        (occ) => occ.userId !== identity.id
+      );
+      onPresence(others);
+    };
+
+    const handler = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || data.roomId !== roomId) return;
+
+      if (data.type === "join" || data.type === "position") {
+        if (data.occupant && data.occupant.userId !== identity.id) {
+          roomMap?.set(data.occupant.userId, data.occupant);
+          emit();
+          if (data.type === "join") {
+            const curX =
+              latestLocalPose && latestLocalPose.roomId === roomId
+                ? latestLocalPose.x
+                : 8.5;
+            const curZ =
+              latestLocalPose && latestLocalPose.roomId === roomId
+                ? latestLocalPose.z
+                : 9.4;
+            const curYaw =
+              latestLocalPose && latestLocalPose.roomId === roomId
+                ? latestLocalPose.yaw
+                : Math.PI;
+            channel.postMessage({
+              type: "position",
+              roomId,
+              occupant: {
+                userId: identity.id,
+                displayName: identity.name,
+                username: identity.name.toLowerCase(),
+                avatar: {
+                  tint: identity.tint,
+                  body: "b",
+                  outfit: "smart",
+                  accessory: "glasses",
+                },
+                roomId,
+                status: "online",
+                position: { x: curX, y: 0, z: curZ },
+                rotation: curYaw,
+                updatedAt: new Date().toISOString(),
+              },
+            });
+          }
+        }
+      } else if (data.type === "leave") {
+        if (data.userId) {
+          roomMap?.delete(data.userId);
+          emit();
+        }
+      } else if (data.type === "query") {
+        const curX =
+          latestLocalPose && latestLocalPose.roomId === roomId
+            ? latestLocalPose.x
+            : 8.5;
+        const curZ =
+          latestLocalPose && latestLocalPose.roomId === roomId
+            ? latestLocalPose.z
+            : 9.4;
+        const curYaw =
+          latestLocalPose && latestLocalPose.roomId === roomId
+            ? latestLocalPose.yaw
+            : Math.PI;
+
+        channel.postMessage({
+          type: "join",
+          roomId,
+          occupant: {
+            userId: identity.id,
+            displayName: identity.name,
+            username: identity.name.toLowerCase(),
+            avatar: {
+              tint: identity.tint,
+              body: "b",
+              outfit: "smart",
+              accessory: "glasses",
+            },
+            roomId,
+            status: "online",
+            position: { x: curX, y: 0, z: curZ },
+            rotation: curYaw,
+            updatedAt: new Date().toISOString(),
+          },
+        });
+      }
+    };
+
+    channel.addEventListener("message", handler);
+    onState?.("live");
+    channel.postMessage({ type: "query", roomId });
+    emit();
+
+    return () => {
+      channel.removeEventListener("message", handler);
+    };
   },
 
   fetchMessages(_roomId: string): Promise<OfficeChatMessage[]> {

@@ -74,6 +74,9 @@ interface AvatarRig {
   ring: THREE.Mesh;
   phase: number;
   status?: PresenceStatus;
+  targetX?: number;
+  targetZ?: number;
+  targetYaw?: number;
   bubble?: {
     sprite: THREE.Sprite;
     material: THREE.SpriteMaterial;
@@ -424,6 +427,11 @@ export class OfficeEngine {
 
   private colliders: Collider[] = [];
   private wallColliders: Collider[] = [];
+  private occlusionWalls: Array<{
+    mesh: THREE.Mesh<THREE.BoxGeometry, THREE.Material>;
+    bounds: THREE.Box3;
+    depthWrite: boolean;
+  }> = [];
   private staticColliders: Collider[] = [];
   private furnitureColliders: Collider[] = [];
 
@@ -589,6 +597,8 @@ export class OfficeEngine {
     this.playerVelocity.set(0, 0);
     this.cameraTarget.set(room.spawn.x, 1.25, room.spawn.z);
     this.playerRig?.group.position.set(room.spawn.x, 0, room.spawn.z);
+    this.currentRoom = room;
+    this.callbacks.onRoomChange(room);
   }
 
   private roomsOnFloor(index: number): OfficeRoom[] {
@@ -604,6 +614,18 @@ export class OfficeEngine {
       );
     }
     return this.allRooms.filter((room) => (room.floorIndex ?? 0) === index);
+  }
+
+  private getFloorCommonRoom(index: number): OfficeRoom | null {
+    const floorRooms = this.roomsOnFloor(index);
+    return (
+      floorRooms.find((room) => room.kind === "reception") ??
+      floorRooms.find((room) => room.id === "reception") ??
+      floorRooms.find((room) => room.kind === "lobby") ??
+      floorRooms.find((room) => room.kind === "area") ??
+      floorRooms[0] ??
+      null
+    );
   }
 
   /** Give the tower the floor directory and the people who sit in it. */
@@ -839,7 +861,9 @@ export class OfficeEngine {
       this.syncZoe();
       const entrance =
         this.rooms.find((room) => room.kind === "reception") ??
-        this.rooms.find((room) => room.kind === "lobby");
+        this.rooms.find((room) => room.id === "reception") ??
+        this.rooms.find((room) => room.kind === "lobby") ??
+        this.rooms[0];
       if (entrance) {
         this.playerPosition.set(entrance.spawn.x, 0, entrance.spawn.z);
         this.cameraTarget.set(entrance.spawn.x, 1.25, entrance.spawn.z);
@@ -931,6 +955,9 @@ export class OfficeEngine {
 
     this.resize();
     this.callbacks.onReady();
+    if (this.currentRoom) {
+      this.callbacks.onRoomChange(this.currentRoom);
+    }
     this.loop();
   }
 
@@ -992,6 +1019,17 @@ export class OfficeEngine {
     this.refreshSelection();
   }
 
+  setSelfId(selfId: string) {
+    if (this.selfId === selfId) return;
+    this.selfId = selfId;
+    const existingSelf = this.agentRigs.get(selfId);
+    if (existingSelf) {
+      this.avatarGroup.remove(existingSelf.group);
+      disposeObject(existingSelf.group);
+      this.agentRigs.delete(selfId);
+    }
+  }
+
   // Reconciles the roster of other people in the office. Called from the
   // live source whenever the roster changes (join, update, leave).
   setOccupants(occupants: OfficeOccupant[]) {
@@ -1002,6 +1040,10 @@ export class OfficeEngine {
       if (occ.userId === this.selfId || occ.userId === "you") continue; // self is rendered separately
 
       let rig = this.agentRigs.get(occ.userId);
+      const posX = occ.position?.x ?? 0;
+      const posZ = occ.position?.z ?? (occ.position as any)?.y ?? 0;
+      const yaw = occ.rotation ?? 0;
+
       if (!rig) {
         rig = this.createAvatar(
           occ.avatar,
@@ -1011,12 +1053,27 @@ export class OfficeEngine {
           false,
           false
         );
+        rig.group.position.set(posX, 0, posZ);
+        rig.group.rotation.y = yaw;
+        rig.targetX = posX;
+        rig.targetZ = posZ;
+        rig.targetYaw = yaw;
         this.agentRigs.set(occ.userId, rig);
         this.avatarGroup.add(rig.group);
+      } else {
+        const dx = posX - rig.group.position.x;
+        const dz = posZ - rig.group.position.z;
+        const dist = Math.hypot(dx, dz);
+        // If occupant teleported or changed room/spawn (> 6m), snap immediately
+        if (dist > 6) {
+          rig.group.position.set(posX, 0, posZ);
+          rig.group.rotation.y = yaw;
+        }
+        rig.targetX = posX;
+        rig.targetZ = posZ;
+        rig.targetYaw = yaw;
       }
 
-      rig.group.position.set(occ.position.x, 0, occ.position.z);
-      rig.group.rotation.y = occ.rotation ?? 0;
       this.updateRigStatus(rig, occ.status);
       next.set(occ.userId, rig);
     }
@@ -1026,7 +1083,6 @@ export class OfficeEngine {
       if (!next.has(id)) {
         this.avatarGroup.remove(rig.group);
         disposeObject(rig.group);
-        this.agentRigs.delete(id);
       }
     }
 
@@ -1093,7 +1149,7 @@ export class OfficeEngine {
       this.setActiveFloor(room.floorIndex ?? 0);
     }
     this.playerPosition.set(room.spawn.x, 0, room.spawn.z);
-    this.playerYaw = room.id === "reception" ? Math.PI : Math.PI;
+    this.playerYaw = Math.PI;
     this.path = [];
     this.playerVelocity.set(0, 0);
     this.currentRoom = room;
@@ -1165,6 +1221,7 @@ export class OfficeEngine {
     if (this.tower) this.scene.remove(this.tower.group);
     this.tower = null;
 
+    this.occlusionWalls = [];
     disposeObject(this.scene);
     this.skyTexture?.dispose();
     this.skyTexture = null;
@@ -1219,6 +1276,7 @@ export class OfficeEngine {
       }
     }
 
+    this.occlusionWalls = [];
     this.colliders = [];
     this.wallColliders = [];
     this.staticColliders = [];
@@ -2493,8 +2551,20 @@ export class OfficeEngine {
     collider = true,
     yOverride?: number
   ) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, height, d), material);
+    // Walls share palette materials, but only the obstructing wall may fade.
+    const opaque = !material.transparent && material.opacity === 1;
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(w, height, d),
+      opaque ? material.clone() : material
+    );
     mesh.position.set(x, yOverride ?? height / 2, z);
+    if (opaque) {
+      this.occlusionWalls.push({
+        mesh,
+        bounds: new THREE.Box3().setFromObject(mesh).expandByScalar(0.08),
+        depthWrite: material.depthWrite,
+      });
+    }
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.buildingGroup.add(mesh);
@@ -3529,10 +3599,12 @@ export class OfficeEngine {
       map: texture,
       transparent: true,
       depthWrite: false,
+      depthTest: false,
     });
     const sprite = new THREE.Sprite(material);
     sprite.position.set(0, 2.75, 0);
     sprite.scale.set(2.7, 1.1, 1);
+    sprite.renderOrder = 11;
     rig.group.add(sprite);
     rig.bubble = {
       sprite,
@@ -3587,10 +3659,11 @@ export class OfficeEngine {
       map: texture,
       transparent: true,
       depthWrite: false,
-      depthTest: true,
+      depthTest: false,
     });
     const sprite = new THREE.Sprite(material);
     sprite.scale.set(2.1, 0.59, 1);
+    sprite.renderOrder = 10;
     return sprite;
   }
 
@@ -4354,8 +4427,25 @@ export class OfficeEngine {
     );
     if (!intersections.length) return;
     const point = intersections[0].point;
-    const targetRoom = this.roomAtPosition(point.x, point.z);
-    if (!targetRoom) {
+    // Corridors need no named room. Reject restricted targets before snapping,
+    // but let findPath snap furniture and wall clicks to nearby free floor.
+    const insideFloor = this.walkBounds.some(
+      (area) =>
+        point.x >= area.minX &&
+        point.x <= area.maxX &&
+        point.z >= area.minZ &&
+        point.z <= area.maxZ
+    );
+    const insideLockedRoom = this.allRooms.some(
+      (room) =>
+        room.locked &&
+        (room.floorIndex ?? 0) === this.activeFloor &&
+        point.x >= room.bounds.x &&
+        point.x <= room.bounds.x + room.bounds.w &&
+        point.z >= room.bounds.z &&
+        point.z <= room.bounds.z + room.bounds.d
+    );
+    if (!insideFloor || insideLockedRoom) {
       this.callbacks.onInvalidTarget();
       return;
     }
@@ -4681,16 +4771,19 @@ export class OfficeEngine {
       this.tower?.update(elapsed);
       this.updateTowerCamera(dt);
       this.updateTowerHover();
+      this.updateWallOcclusion(dt);
       this.renderer.render(this.scene, this.camera);
       return;
     }
 
     this.updatePlayer(dt, elapsed);
     this.updateAgents(dt, elapsed);
+    this.updateOccupants(dt, elapsed);
     this.updateZoe(elapsed);
     this.updateBubbles();
     this.updateLabels();
     this.updateCamera(dt);
+    this.updateWallOcclusion(dt);
     this.updateMarker();
     this.updateRoomCheck();
     this.updateProximity();
@@ -4865,6 +4958,50 @@ export class OfficeEngine {
     }
   }
 
+  private updateOccupants(dt: number, elapsed: number) {
+    if (!this.isLive) return;
+
+    for (const rig of this.agentRigs.values()) {
+      if (rig.targetX === undefined || rig.targetZ === undefined) {
+        this.animateRig(rig, 0, elapsed);
+        continue;
+      }
+
+      const dx = rig.targetX - rig.group.position.x;
+      const dz = rig.targetZ - rig.group.position.z;
+      const dist = Math.hypot(dx, dz);
+
+      let speed = 0;
+      if (dist > 0.02) {
+        const lerpFactor = Math.min(1, dt * 10);
+        rig.group.position.x += dx * lerpFactor;
+        rig.group.position.z += dz * lerpFactor;
+
+        speed = Math.min(3.5, dist / Math.max(dt, 0.016));
+
+        const moveYaw = Math.atan2(dx, dz);
+        const desiredYaw =
+          dist > 0.08 ? moveYaw : (rig.targetYaw ?? rig.group.rotation.y);
+        const yawDelta =
+          ((desiredYaw - rig.group.rotation.y + Math.PI * 3) % (Math.PI * 2)) -
+          Math.PI;
+        rig.group.rotation.y += yawDelta * Math.min(dt * 12, 1);
+      } else {
+        rig.group.position.x = rig.targetX;
+        rig.group.position.z = rig.targetZ;
+        if (rig.targetYaw !== undefined) {
+          const yawDelta =
+            ((rig.targetYaw - rig.group.rotation.y + Math.PI * 3) %
+              (Math.PI * 2)) -
+            Math.PI;
+          rig.group.rotation.y += yawDelta * Math.min(dt * 12, 1);
+        }
+      }
+
+      this.animateRig(rig, speed, elapsed);
+    }
+  }
+
   private updateZoe(elapsed: number) {
     if (!this.zoeRig) return;
     this.animateRig(this.zoeRig, 0, elapsed);
@@ -4888,6 +5025,7 @@ export class OfficeEngine {
     const rigs = [
       this.playerRig,
       ...this.agents.map((agent) => agent.rig),
+      ...this.agentRigs.values(),
       this.zoeRig,
     ];
     for (const rig of rigs) {
@@ -5003,6 +5141,58 @@ export class OfficeEngine {
     this.camera.lookAt(this.cameraTarget);
   }
 
+  private updateWallOcclusion(dt: number) {
+    const following =
+      this.view === "floor" && !this.cinematic && this.playerRig;
+    const targets: THREE.Vector3[] = [];
+    if (following) {
+      // Sample the body as well as the head: a low partition can hide the legs
+      // without crossing the camera's look-at point.
+      for (const height of [0.35, 1.1, 1.75]) {
+        for (const side of [-0.28, 0.28]) {
+          targets.push(
+            new THREE.Vector3(
+              this.playerPosition.x + Math.cos(this.cameraYaw) * side,
+              height,
+              this.playerPosition.z - Math.sin(this.cameraYaw) * side
+            )
+          );
+        }
+      }
+    }
+    const rays = targets.map((target) => ({
+      ray: new THREE.Ray(
+        this.camera.position,
+        target.clone().sub(this.camera.position).normalize()
+      ),
+      distanceSquared: target.distanceToSquared(this.camera.position),
+    }));
+    const hit = new THREE.Vector3();
+    for (const wall of this.occlusionWalls) {
+      const obscures = rays.some(({ ray, distanceSquared }) => {
+        if (wall.bounds.containsPoint(this.camera.position)) return true;
+        return (
+          ray.intersectBox(wall.bounds, hit) !== null &&
+          hit.distanceToSquared(this.camera.position) < distanceSquared
+        );
+      });
+      const material = wall.mesh.material;
+      const opacity = THREE.MathUtils.damp(
+        material.opacity,
+        obscures ? 0.35 : 1,
+        18,
+        dt
+      );
+      const fading = obscures || opacity < 0.995;
+      if (material.transparent !== fading) {
+        material.transparent = fading;
+        material.needsUpdate = true;
+      }
+      material.opacity = fading ? opacity : 1;
+      material.depthWrite = fading ? false : wall.depthWrite;
+    }
+  }
+
   private updateMarker() {
     if (this.marker && performance.now() > this.markerUntil) {
       this.buildingGroup.remove(this.marker);
@@ -5020,7 +5210,7 @@ export class OfficeEngine {
       this.playerPosition.x,
       this.playerPosition.z
     );
-    const nextRoom = room ?? null;
+    const nextRoom = room ?? this.getFloorCommonRoom(this.activeFloor);
     if (nextRoom?.id !== this.currentRoom?.id) {
       this.currentRoom = nextRoom;
       if (nextRoom?.kind === "focus") {
