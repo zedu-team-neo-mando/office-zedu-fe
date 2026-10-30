@@ -325,6 +325,7 @@ interface OfficeCell {
   ceilingLight?: THREE.Mesh;
   ceilingMaterial?: THREE.MeshStandardMaterial;
   floorMaterial?: THREE.MeshStandardMaterial;
+  sideMaterials?: THREE.MeshStandardMaterial[];
   baseWallColor: THREE.Color;
   warmth: number;
 }
@@ -520,6 +521,11 @@ export class TowerScene {
       }
       if (cell.floorMaterial) {
         cell.floorMaterial.color.setHex(style.floorColor);
+      }
+      if (cell.sideMaterials) {
+        for (const mat of cell.sideMaterials) {
+          mat.color.setHex(style.sideColor);
+        }
       }
     }
   }
@@ -836,13 +842,16 @@ export class TowerScene {
     floor.position.set(rect.x, bottom + 0.035, zBack + CELL_INSET / 2);
     this.shell.add(floor);
 
+    const sideMaterials: THREE.MeshStandardMaterial[] = [];
     for (const side of [-1, 1]) {
+      const sideMat = new THREE.MeshStandardMaterial({
+        color: style.sideColor,
+        roughness: 0.9,
+      });
+      sideMaterials.push(sideMat);
       const wall = new THREE.Mesh(
         new THREE.BoxGeometry(0.055, h, CELL_INSET),
-        new THREE.MeshStandardMaterial({
-          color: PALETTE.wallShade,
-          roughness: 0.9,
-        })
+        sideMat
       );
       wall.position.set(
         rect.x + side * (w / 2 - 0.028),
@@ -976,6 +985,7 @@ export class TowerScene {
       ceilingLight,
       ceilingMaterial: ceilingMat,
       floorMaterial: floorMat,
+      sideMaterials,
       baseWallColor: wallColor,
       warmth,
     };
@@ -1139,13 +1149,14 @@ export class TowerScene {
   ) {
     if (!isTowerRoom(office)) {
       return {
-        ceilingColor: 0x5a544a,
+        ceilingColor: 0x484238,
         ceilingEmissive: 0xcca666,
         ceilingIntensity: 0.08,
-        wallColor: baseWallColor.clone().multiplyScalar(0.48),
+        wallColor: new THREE.Color(0x3a352e),
         wallEmissive: PALETTE.glow,
         wallIntensity: 0.04 * warmth,
-        floorColor: 0x5c4633,
+        sideColor: 0x4a4338,
+        floorColor: 0x3d2c1e,
       };
     }
 
@@ -1158,34 +1169,37 @@ export class TowerScene {
         wallColor: baseWallColor,
         wallEmissive: PALETTE.glow,
         wallIntensity: 0.22 * warmth,
+        sideColor: PALETTE.wallShade,
         floorColor: 0xd8d0c2,
       };
     }
 
     if (!office.present || office.status === "away") {
-      // Away or unoccupied personal office: clearly dimmed ambient state
-      // preserving architectural wall, floor and furniture geometry without black voids.
+      // Away or unoccupied personal office: unlit room state (~15-20% internal emission)
+      // Harmoniously shaded interior walls, dividers, and wood floor without pitch-black voids.
       return {
-        ceilingColor: 0x5a544a,
+        ceilingColor: 0x484238,
         ceilingEmissive: 0xcca666,
         ceilingIntensity: 0.08,
-        wallColor: baseWallColor.clone().multiplyScalar(0.48),
+        wallColor: new THREE.Color(0x3a352e),
         wallEmissive: PALETTE.glow,
         wallIntensity: 0.04 * warmth,
-        floorColor: 0x5c4633,
+        sideColor: 0x4a4338,
+        floorColor: 0x3d2c1e,
       };
     }
 
     if (office.status === "idle") {
       // Inactive / idle occupant (> 2 min no input): soft warm dim (~50-60%)
       return {
-        ceilingColor: 0xd8ceb5,
+        ceilingColor: 0xc8bc9e,
         ceilingEmissive: 0xd4a055,
-        ceilingIntensity: 0.7,
-        wallColor: baseWallColor.clone().multiplyScalar(0.72),
+        ceilingIntensity: 0.65,
+        wallColor: baseWallColor.clone().multiplyScalar(0.68),
         wallEmissive: PALETTE.glow,
         wallIntensity: 0.15 * warmth,
-        floorColor: 0x8a684b,
+        sideColor: 0x9e9380,
+        floorColor: 0x7a5b3f,
       };
     }
 
@@ -1197,6 +1211,7 @@ export class TowerScene {
       wallColor: baseWallColor,
       wallEmissive: PALETTE.glow,
       wallIntensity: 0.3 * warmth,
+      sideColor: PALETTE.wallShade,
       floorColor: PALETTE.wood,
     };
   }
