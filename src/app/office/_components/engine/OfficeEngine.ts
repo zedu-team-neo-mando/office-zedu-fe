@@ -521,21 +521,20 @@ export class OfficeEngine {
     }
     if (!Number.isFinite(minX)) return;
 
-    const pad = 1.4;
+    // The server places connecting corridors between the office blocks.
+    // Keep the front doorway corridor and a narrow visual clearance so the
+    // outer wall faces never sit on the boundary inlay (20 cm of clear trim).
+    const wallLip = 0.35;
+    const frontCorridor = 2;
     this.planBounds = {
-      minX: minX - pad,
-      maxX: maxX + pad,
-      minZ: minZ - pad,
-      maxZ: maxZ + pad,
+      minX: minX - wallLip,
+      maxX: maxX + wallLip,
+      minZ: minZ - wallLip,
+      maxZ: maxZ + frontCorridor,
     };
-    this.walkBounds = [
-      {
-        minX: this.planBounds.minX + 0.5,
-        maxX: this.planBounds.maxX - 0.5,
-        minZ: this.planBounds.minZ + 0.5,
-        maxZ: this.planBounds.maxZ - 0.5,
-      },
-    ];
+    // Rendering and navigation share one footprint; isBlocked reserves the
+    // avatar radius at its edges rather than a second invisible floor inset.
+    this.walkBounds = [{ ...this.planBounds }];
     this.floorPlane.position.set(
       (this.planBounds.minX + this.planBounds.maxX) / 2,
       0,
@@ -1910,12 +1909,72 @@ export class OfficeEngine {
     this.staticGroup.add(ground);
 
     const plinth = new THREE.Mesh(
-      new THREE.BoxGeometry(this.planWidth + 6, 0.22, this.planDepth + 6),
+      new THREE.BoxGeometry(this.planWidth, 0.22, this.planDepth),
       new THREE.MeshStandardMaterial({ color: PALETTE.stone, roughness: 0.85 })
     );
     plinth.position.set(cx, -0.11, cz);
     plinth.receiveShadow = true;
+    plinth.name = "live-walkable-platform";
     this.staticGroup.add(plinth);
+
+    // A thin inlay marks the front edge of the usable corridor, so the site
+    // beyond the platform does not read as another stretch of walking floor.
+    const edge = new THREE.Mesh(
+      new THREE.BoxGeometry(this.planWidth, 0.025, 0.08),
+      new THREE.MeshStandardMaterial({ color: PALETTE.slab, roughness: 1 })
+    );
+    edge.name = "live-corridor-edge";
+    edge.position.set(cx, 0.0125, this.planBounds.maxZ - 0.04);
+    this.staticGroup.add(edge);
+
+    const sideEdge = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.025, this.planDepth),
+      edge.material
+    );
+    sideEdge.name = "live-side-corridor-edge";
+    sideEdge.position.set(this.planBounds.minX + 0.04, 0.0125, cz);
+    this.staticGroup.add(sideEdge);
+
+    const rightEdge = new THREE.Mesh(sideEdge.geometry, edge.material);
+    rightEdge.name = "live-right-corridor-edge";
+    rightEdge.position.set(this.planBounds.maxX - 0.04, 0.0125, cz);
+    this.staticGroup.add(rightEdge);
+
+    const finish = new THREE.Mesh(
+      new THREE.PlaneGeometry(this.planWidth, this.planDepth),
+      new THREE.MeshStandardMaterial({
+        color: PALETTE.terrazzo,
+        roughness: 0.9,
+      })
+    );
+    finish.name = "live-corridor-floor";
+    finish.rotation.x = -Math.PI / 2;
+    finish.position.set(cx, 0.003, cz);
+    finish.receiveShadow = true;
+    this.staticGroup.add(finish);
+
+    // One-metre tile seams stay below the raised room pads, so only the
+    // continuous circulation floor reads as terrazzo between office blocks.
+    const { minX, maxX, minZ, maxZ } = this.planBounds;
+    const lines: number[] = [];
+    for (let x = Math.ceil(minX); x < maxX; x += 1) {
+      lines.push(x, 0.006, minZ, x, 0.006, maxZ);
+    }
+    for (let z = Math.ceil(minZ); z < maxZ; z += 1) {
+      lines.push(minX, 0.006, z, maxX, 0.006, z);
+    }
+    const seams = new THREE.LineSegments(
+      new THREE.BufferGeometry().setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(lines, 3)
+      ),
+      new THREE.LineBasicMaterial({
+        color: PALETTE.wallShade,
+        transparent: true,
+        opacity: 0.3,
+      })
+    );
+    this.staticGroup.add(seams);
   }
 
   private addLiveRoomPads() {
@@ -1981,6 +2040,21 @@ export class OfficeEngine {
     });
     const thickness = 0.14;
     const doorHead = 2.1;
+    const built = new Set<string>();
+    const addWall = (...args: Parameters<OfficeEngine["addWallBox"]>) => {
+      const key = [
+        ...args.slice(0, 4),
+        args[5] ?? BUILDING.wallHeight,
+        args[6] ?? true,
+        args[7] ?? null,
+        args[4].uuid,
+      ]
+        .map((value) => (typeof value === "number" ? value.toFixed(4) : value))
+        .join(":");
+      if (built.has(key)) return;
+      built.add(key);
+      this.addWallBox(...args);
+    };
 
     for (const room of this.rooms) {
       const b = room.bounds;
@@ -1994,23 +2068,16 @@ export class OfficeEngine {
       const doorway = Math.min(1.7, Math.max(1, b.w * 0.42));
       const segment = (b.w - doorway) / 2;
 
-      this.addWallBox(cx, b.z, b.w, thickness, wall, height);
-      this.addWallBox(b.x, cz, thickness, b.d, wall, height);
-      this.addWallBox(b.x + b.w, cz, thickness, b.d, wall, height);
+      addWall(cx, b.z, b.w, thickness, wall, height);
+      addWall(b.x, cz, thickness, b.d, wall, height);
+      addWall(b.x + b.w, cz, thickness, b.d, wall, height);
 
       if (segment > 0.08) {
         // The wood around a doorway is what makes a room look entered, not
         // cut into. Open zones keep the plaster.
         const side = closed ? jamb : wall;
-        this.addWallBox(
-          b.x + segment / 2,
-          b.z + b.d,
-          segment,
-          thickness,
-          side,
-          height
-        );
-        this.addWallBox(
+        addWall(b.x + segment / 2, b.z + b.d, segment, thickness, side, height);
+        addWall(
           b.x + b.w - segment / 2,
           b.z + b.d,
           segment,
@@ -2024,7 +2091,7 @@ export class OfficeEngine {
         // The band over the door is glazed: a wing of forty closed offices is
         // still a bright building, and you can see who is at their desk.
         const head = Math.max(0.3, height - doorHead);
-        this.addWallBox(
+        addWall(
           cx,
           b.z + b.d,
           doorway,
