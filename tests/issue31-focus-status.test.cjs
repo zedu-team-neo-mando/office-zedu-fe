@@ -160,7 +160,7 @@ test("demo Focus state still works without a backend", () => {
   e.updatePlayerRoomStatus({ kind: "focus" });
   assert.equal(e.playerStatus, "dnd");
   e.updatePlayerRoomStatus({ kind: "lounge" });
-  assert.equal(e.playerStatus, "away");
+  assert.equal(e.playerStatus, "online");
 });
 test("confirmed status refreshes nameplate and ring and disposes the old material", () => {
   const e = engineHarness();
@@ -278,3 +278,93 @@ for (const [status, colour] of [
     assert.ok(marker.includes(status === "dnd" ? "Do not disturb" : status));
   });
 }
+
+for (const previous of ["away", "call"]) {
+  test(`initial entry waits for the existing ${previous} status before any write`, async () => {
+    const { source, requests, writes, socketWrites, handlers, subscription } =
+      sourceHarness(previous);
+    let resolveSnapshot;
+    const snapshot = new Promise((resolve) => {
+      resolveSnapshot = resolve;
+    });
+    requests.GetRequest = () => snapshot;
+    subscription.state = "subscribed";
+    const stop = source.subscribePresence("reception", () => {});
+    const entry = source.enterRoom("reception");
+    await new Promise(setImmediate);
+    assert.equal(writes.length, 0);
+    assert.equal(socketWrites.filter((event) => event.presence).length, 0);
+    resolveSnapshot({
+      status: 200,
+      data: {
+        data: [{ userId: "self", roomId: "reception", status: previous }],
+      },
+    });
+    await entry;
+    assert.equal(writes.at(-1).payload.status, previous);
+    assert.ok(
+      socketWrites
+        .filter((event) => event.presence)
+        .every((event) => event.presence.status === previous)
+    );
+    await source.enterRoom("focus:1");
+    await source.enterRoom("reception");
+    assert.equal(writes.at(-1).payload.status, previous);
+    stop();
+  });
+}
+
+test("demo Focus exit uses the destination room status in both directions", () => {
+  const e = engineHarness(false);
+  for (const kind of ["reception", "focus", "meeting", "focus", "reception"]) {
+    e.updatePlayerRoomStatus({ kind });
+    assert.equal(
+      e.playerStatus,
+      kind === "focus" ? "dnd" : kind === "meeting" ? "call" : "online"
+    );
+  }
+});
+
+test("demo map fallback agrees with Focus, meeting and reception statuses", () => {
+  const text = fs.readFileSync(
+    path.join(root, "app/office/_components/OfficeDemo.tsx"),
+    "utf8"
+  );
+  const ast = ts.createSourceFile(
+    "OfficeDemo.tsx",
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX
+  );
+  let expression;
+  function visit(node) {
+    if (ts.isJsxAttribute(node) && node.name.getText(ast) === "selfStatus")
+      expression = node.initializer.expression.getText(ast);
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  const status = new Function(
+    "presence",
+    "selfId",
+    "source",
+    "currentRoom",
+    `return (${expression});`
+  );
+  for (const [kind, expected] of [
+    ["focus", "dnd"],
+    ["meeting", "call"],
+    ["reception", "online"],
+  ]) {
+    assert.equal(status([], "self", { mode: "demo" }, { kind }), expected);
+  }
+  assert.equal(
+    status(
+      [{ id: "self", status: "away" }],
+      "self",
+      { mode: "live" },
+      { kind: "meeting" }
+    ),
+    "away"
+  );
+});

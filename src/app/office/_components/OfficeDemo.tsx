@@ -2046,7 +2046,9 @@ export default function OfficeDemo({
               presence.find((point) => point.id === selfId)?.status ??
               (source.mode === "demo" && currentRoom?.kind === "focus"
                 ? "dnd"
-                : "online")
+                : source.mode === "demo" && currentRoom?.kind === "meeting"
+                  ? "call"
+                  : "online")
             }
             presence={presence}
             avatar={avatar}

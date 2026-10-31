@@ -5166,11 +5166,13 @@ export class OfficeEngine {
     if (room?.kind === "focus") {
       this.beforeFocusStatus ??= this.playerStatus;
       if (!this.isLive) this.playerStatus = "dnd";
-    } else if (this.beforeFocusStatus !== null) {
-      this.playerStatus = this.beforeFocusStatus;
+    } else {
+      if (!this.isLive) {
+        this.playerStatus = room?.kind === "meeting" ? "call" : "online";
+      } else if (this.beforeFocusStatus !== null) {
+        this.playerStatus = this.beforeFocusStatus;
+      }
       this.beforeFocusStatus = null;
-    } else if (!this.isLive) {
-      this.playerStatus = room?.kind === "meeting" ? "call" : "online";
     }
     if (this.playerRig) this.updateRigStatus(this.playerRig, this.playerStatus);
   }
