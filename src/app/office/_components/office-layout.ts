@@ -40,14 +40,14 @@ export function ownsPersonalOffice(room: OfficeRoom, userId: string): boolean {
 /**
  * The furniture a personal office starts with.
  *
- * The desk stands out in the room on its own rug with the chair behind it,
- * facing the back wall, and the back wall holds a plant, an open bookshelf and
- * a reading lamp; the framed print hangs between them. Every piece is an
- * ordinary layout item, so the owner can select, move, rotate, delete and keep
- * it. It is sized from the room, so both the 5 by 5.4 member office and the
- * demo's wider offices work: a piece that would cross a wall, block the
- * doorway or overlap something already in the room is left out rather than
- * forced in.
+ * The desk stands out in the room on its own rug. The owner's chair sits on
+ * the wall side of it, facing visitors who come in, and the back wall holds a
+ * plant, an open bookshelf and a reading lamp; the framed print hangs between
+ * them. Every piece is an ordinary layout item, so the owner can select, move,
+ * rotate, delete and keep it. It is sized from the room, so both the 5 by 5.4
+ * member office and the demo's wider offices work: a piece that would cross a
+ * wall, block the doorway or overlap something already in the room is left out
+ * rather than forced in.
  */
 export function personalOfficeTemplate(room: OfficeRoom): FurnitureItem[] {
   const b = room.bounds;
@@ -61,13 +61,20 @@ export function personalOfficeTemplate(room: OfficeRoom): FurnitureItem[] {
 
   const pieces: TemplatePiece[] = [
     { key: "rug", catalogId: "rug", x: cx, z: deskZ + 0.55, rotation: 0 },
-    { key: "desk", catalogId: "desk_oak", x: cx, z: deskZ, rotation: 0 },
+    // The owner sits at the wall side, behind the desk, facing visitors.
+    {
+      key: "desk",
+      catalogId: "desk_oak",
+      x: cx,
+      z: deskZ + 1.1,
+      rotation: 180,
+    },
     {
       key: "chair",
       catalogId: "chair_ergo",
       x: cx,
-      z: deskZ + 1.1,
-      rotation: 180,
+      z: deskZ,
+      rotation: 0,
     },
     { key: "plant", catalogId: "plant", x: b.x + 0.65, z: backZ, rotation: 0 },
     {
