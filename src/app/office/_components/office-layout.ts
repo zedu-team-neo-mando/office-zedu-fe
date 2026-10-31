@@ -20,6 +20,36 @@ function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+type Rotation = FurnitureItem["rotation"];
+
+/** The way each rotation faces on the floor: 0 looks along +z, 90 along +x. */
+const DIRECTION: Record<Rotation, { x: number; z: number }> = {
+  0: { x: 0, z: 1 },
+  90: { x: 1, z: 0 },
+  180: { x: 0, z: -1 },
+  270: { x: -1, z: 0 },
+};
+
+function oppositeRotation(rotation: Rotation): Rotation {
+  return ((rotation + 180) % 360) as Rotation;
+}
+
+/**
+ * The rotation that looks from the middle of the room toward its door, which
+ * sits on one of the four walls. A door that cannot be placed on a wall falls
+ * back to the +z wall, the side the live offices use.
+ */
+function rotationTowardDoor(room: OfficeRoom): Rotation {
+  const { bounds: b, door } = room;
+  const walls: Array<[Rotation, number]> = [
+    [0, Math.abs(door.z - (b.z + b.d))],
+    [90, Math.abs(door.x - (b.x + b.w))],
+    [180, Math.abs(door.z - b.z)],
+    [270, Math.abs(door.x - b.x)],
+  ];
+  return walls.reduce((best, wall) => (wall[1] < best[1] ? wall : best))[0];
+}
+
 export function roomContains(room: OfficeRoom, x: number, z: number): boolean {
   const b = room.bounds;
   return x >= b.x && x <= b.x + b.w && z >= b.z && z <= b.z + b.d;
@@ -40,34 +70,62 @@ export function ownsPersonalOffice(room: OfficeRoom, userId: string): boolean {
 /**
  * The furniture a personal office starts with.
  *
- * The desk stands out in the room on its own rug with the chair behind it,
- * facing the back wall, and the back wall holds a plant, an open bookshelf and
- * a reading lamp; the framed print hangs between them. Every piece is an
- * ordinary layout item, so the owner can select, move, rotate, delete and keep
- * it. It is sized from the room, so both the 5 by 5.4 member office and the
- * demo's wider offices work: a piece that would cross a wall, block the
- * doorway or overlap something already in the room is left out rather than
- * forced in.
+ * The desk stands out in the room on its own rug. The owner's chair sits on
+ * the wall side of it, facing visitors who come in, and the back wall holds a
+ * plant, an open bookshelf and a reading lamp; the framed print hangs between
+ * them. Every piece is an ordinary layout item, so the owner can select, move,
+ * rotate, delete and keep it. It is sized from the room, so both the 5 by 5.4
+ * member office and the demo's wider offices work: a piece that would cross a
+ * wall, block the doorway or overlap something already in the room is left out
+ * rather than forced in.
  */
 export function personalOfficeTemplate(room: OfficeRoom): FurnitureItem[] {
   const b = room.bounds;
   const cx = b.x + b.w / 2;
+  const cz = b.z + b.d / 2;
   const roomy = b.w >= 4.2 && b.d >= 4.2;
+  // The owner sits at the wall opposite the door and looks toward it, so a
+  // visitor who walks in sees the owner behind the desk. The live and demo
+  // offices have their doors on different walls, so read it from the room.
+  const toDoor = rotationTowardDoor(room);
+  const dir = DIRECTION[toDoor];
+  const alongZ = dir.z !== 0;
+  const sign = dir.x + dir.z;
+  const length = alongZ ? b.d : b.w;
   // A small office keeps the desk near the wall so the doorway stays clear.
-  const deskZ =
-    b.z + (roomy ? Math.min(1.9, b.d * 0.36) : Math.min(1.3, b.d * 0.26));
+  const seatOffset = roomy
+    ? Math.min(1.9, length * 0.36)
+    : Math.min(1.3, length * 0.26);
+  // The wall behind the owner, and a point a given distance from it.
+  const lowWall = alongZ ? b.z : b.x;
+  const highWall = alongZ ? b.z + b.d : b.x + b.w;
+  const farWall = sign > 0 ? lowWall : highWall;
+  const at = (distance: number) =>
+    alongZ
+      ? { x: cx, z: farWall + sign * distance }
+      : { x: farWall + sign * distance, z: cz };
+  const chair = at(seatOffset);
+  const desk = at(seatOffset + 1.1);
+  const rug = at(seatOffset + 0.55);
   // Along the back wall: a footprint is 1 by 1, so 0.65 clears the wall.
   const backZ = b.z + 0.65;
 
   const pieces: TemplatePiece[] = [
-    { key: "rug", catalogId: "rug", x: cx, z: deskZ + 0.55, rotation: 0 },
-    { key: "desk", catalogId: "desk_oak", x: cx, z: deskZ, rotation: 0 },
+    { key: "rug", catalogId: "rug", x: rug.x, z: rug.z, rotation: 0 },
+    // The owner sits at the wall side, behind the desk, facing visitors.
+    {
+      key: "desk",
+      catalogId: "desk_oak",
+      x: desk.x,
+      z: desk.z,
+      rotation: oppositeRotation(toDoor),
+    },
     {
       key: "chair",
       catalogId: "chair_ergo",
-      x: cx,
-      z: deskZ + 1.1,
-      rotation: 180,
+      x: chair.x,
+      z: chair.z,
+      rotation: toDoor,
     },
     { key: "plant", catalogId: "plant", x: b.x + 0.65, z: backZ, rotation: 0 },
     {
