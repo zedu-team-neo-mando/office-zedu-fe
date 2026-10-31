@@ -246,3 +246,35 @@ test("DND toast requires the current user's confirmed Focus presence", () => {
   merge([{ ...occupant, status: "dnd" }]);
   assert.equal(toasts.length, 1);
 });
+
+for (const [status, colour] of [
+  ["online", "#34d399"],
+  ["call", "#60a5fa"],
+  ["dnd", "#f43f5e"],
+  ["away", "#94a3b8"],
+]) {
+  test(`own map marker reflects ${status} and keeps its identity outline`, () => {
+    const { renderToStaticMarkup } = require("react-dom/server");
+    const { Minimap } = load("app/office/_components/Hud.tsx", {
+      "~/lib/utils": { cn: (...classes) => classes.filter(Boolean).join(" ") },
+    });
+    const html = renderToStaticMarkup(
+      Minimap({
+        rooms: [],
+        currentRoomId: null,
+        player: { x: 1, z: 2, yaw: 0 },
+        selfStatus: status,
+        presence: [],
+        onNavigate() {},
+        onClose() {},
+      })
+    );
+    const marker = html.match(
+      /<circle[^>]*r="0.62"[^>]*>[\s\S]*?<\/circle>/
+    )?.[0];
+    assert.ok(marker, "own marker is present");
+    assert.ok(marker.includes(`fill="${colour}"`));
+    assert.ok(marker.includes('stroke="#ffffff"'));
+    assert.ok(marker.includes(status === "dnd" ? "Do not disturb" : status));
+  });
+}

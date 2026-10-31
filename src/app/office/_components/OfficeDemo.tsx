@@ -2042,6 +2042,12 @@ export default function OfficeDemo({
             presenceState={source.mode === "live" ? presenceState : "live"}
             currentRoomId={roomId}
             player={player}
+            selfStatus={
+              presence.find((point) => point.id === selfId)?.status ??
+              (source.mode === "demo" && currentRoom?.kind === "focus"
+                ? "dnd"
+                : "online")
+            }
             presence={presence}
             avatar={avatar}
             selfName={selfName}
