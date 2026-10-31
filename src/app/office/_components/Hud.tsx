@@ -39,6 +39,7 @@ interface HudProps {
   presenceState: "connecting" | "live";
   currentRoomId: string | null;
   player: { x: number; z: number; yaw: number };
+  selfStatus: PresenceStatus;
   presence: PresencePoint[];
   avatar: AvatarConfig;
   selfName: string;
@@ -76,6 +77,7 @@ export default function Hud({
   presenceState,
   currentRoomId,
   player,
+  selfStatus,
   presence,
   avatar,
   selfName,
@@ -249,6 +251,7 @@ export default function Hud({
             rooms={rooms}
             currentRoomId={currentRoomId}
             player={player}
+            selfStatus={selfStatus}
             presence={presence}
             onNavigate={onNavigate}
             onClose={onToggleMap}
@@ -363,6 +366,7 @@ export function Minimap({
   rooms,
   currentRoomId,
   player,
+  selfStatus,
   presence,
   onNavigate,
   onClose,
@@ -371,6 +375,7 @@ export function Minimap({
   rooms: OfficeRoom[];
   currentRoomId: string | null;
   player: { x: number; z: number; yaw: number };
+  selfStatus: PresenceStatus;
   presence: PresencePoint[];
   onNavigate: (roomId: string) => void;
   onClose: () => void;
@@ -533,23 +538,27 @@ export function Minimap({
           cx={player.x}
           cy={player.z}
           r="1.1"
-          fill="#a78bfa"
+          fill={STATUS_DOT[selfStatus]}
           opacity="0.28"
         />
         <circle
           cx={player.x}
           cy={player.z}
           r="0.62"
-          fill="#ffffff"
-          stroke="#8b5cf6"
+          fill={STATUS_DOT[selfStatus]}
+          stroke="#ffffff"
           strokeWidth="0.24"
-        />
+        >
+          <title>
+            {`You: ${selfStatus === "dnd" ? "Do not disturb" : selfStatus}`}
+          </title>
+        </circle>
         <line
           x1={player.x}
           y1={player.z}
           x2={player.x + Math.sin(player.yaw) * 1.3}
           y2={player.z + Math.cos(player.yaw) * 1.3}
-          stroke="#a78bfa"
+          stroke={STATUS_DOT[selfStatus]}
           strokeWidth="0.24"
           strokeLinecap="round"
         />

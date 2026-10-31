@@ -391,6 +391,9 @@ export class LiveOfficeSource implements OfficeSource {
 
   private orgId = "";
   private userId = "";
+  private previousPresenceStatus: OfficeOccupant["status"] = "online";
+  private initialPresenceStatus: Promise<void> | null = null;
+  private presenceStatusReady = false;
   private channelRoomMap: Record<string, string> = {};
   private dmOfficeMap: Record<string, string> = {};
   private dmRoomMap: Record<string, string> = {};
@@ -643,11 +646,43 @@ export class LiveOfficeSource implements OfficeSource {
     throw new Error("Zoe could not answer that right now.");
   }
 
+  private presenceStatus(roomId: string): OfficeOccupant["status"] {
+    return this.rooms.find((room) => room.id === roomId)?.kind === "focus"
+      ? "dnd"
+      : this.previousPresenceStatus;
+  }
+
+  private ensureInitialPresenceStatus(roomId: string): Promise<void> {
+    if (!this.initialPresenceStatus) {
+      this.initialPresenceStatus = this.fetchOccupants(roomId)
+        .then((occupants) => {
+          const own = occupants.find(
+            (occupant) => occupant.userId === this.userId
+          );
+          if (
+            own &&
+            this.rooms.find((room) => room.id === roomId)?.kind !== "focus"
+          ) {
+            this.previousPresenceStatus = own.status;
+          }
+          this.presenceStatusReady = true;
+        })
+        .catch((error) => {
+          this.initialPresenceStatus = null;
+          throw error;
+        });
+    }
+    return this.initialPresenceStatus;
+  }
+
   async enterRoom(roomId: string) {
+    await this.ensureInitialPresenceStatus(roomId);
     this.publishOverSocket(roomId, "join");
     try {
       unwrap(
-        await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/enter`, {}),
+        await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/enter`, {
+          status: this.presenceStatus(roomId),
+        }),
         "The room could not be entered."
       );
     } catch {
@@ -671,6 +706,7 @@ export class LiveOfficeSource implements OfficeSource {
     z: number,
     yaw: number
   ): Promise<number> {
+    await this.ensureInitialPresenceStatus(roomId);
     this.lastPose = { roomId, x, z, yaw };
     // Everyone subscribed to the room hears the move straight away over the
     // realtime channel; the REST call below only keeps the server's snapshot
@@ -682,7 +718,11 @@ export class LiveOfficeSource implements OfficeSource {
     // toast, it only hands its status back to the caller to back off with.
     const response = await BuzzRequest(
       `/office/rooms/${encodeRoomId(roomId)}/presence`,
-      { position: { x, y: 0, z }, rotation: yaw }
+      {
+        position: { x, y: 0, z },
+        rotation: yaw,
+        status: this.presenceStatus(roomId),
+      }
     );
     const status = response?.status ?? response?.response?.status;
     if (published) return 200;
@@ -700,6 +740,7 @@ export class LiveOfficeSource implements OfficeSource {
   ): boolean {
     const subscription = this.presenceSubscription;
     if (
+      !this.presenceStatusReady ||
       !subscription ||
       this.presenceRoomId !== roomId ||
       subscription.state !== "subscribed"
@@ -719,7 +760,7 @@ export class LiveOfficeSource implements OfficeSource {
           displayName: this.selfName,
           username: this.selfName,
           avatar: this.initialAvatar,
-          status: "online",
+          status: this.presenceStatus(roomId),
           position: { x, y: 0, z },
           rotation: pose?.yaw ?? Math.PI,
           updatedAt: new Date().toISOString(),
@@ -787,7 +828,16 @@ export class LiveOfficeSource implements OfficeSource {
       upserts: Map<string, OfficeOccupant>;
     } | null = null;
 
-    const emit = () => onPresence([...roster.values()]);
+    const emit = () => {
+      const own = roster.get(this.userId);
+      if (
+        own &&
+        this.rooms.find((room) => room.id === roomId)?.kind !== "focus"
+      ) {
+        this.previousPresenceStatus = own.status;
+      }
+      onPresence([...roster.values()]);
+    };
 
     /** A record only overwrites the one held when it is not provably older. */
     const apply = (
@@ -893,7 +943,11 @@ export class LiveOfficeSource implements OfficeSource {
       // read the room again: it holds everyone the stream did not carry.
       onState?.("live");
       resync();
-      this.publishOverSocket(roomId, "join");
+      void this.ensureInitialPresenceStatus(roomId)
+        .then(() => {
+          if (!cancelled) this.publishOverSocket(roomId, "join");
+        })
+        .catch(() => {});
       subscription
         .publish({ type: "query", roomId, senderId: this.userId })
         .catch(() => {});
