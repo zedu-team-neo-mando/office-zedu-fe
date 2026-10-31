@@ -43,14 +43,25 @@ import {
   CATALOG_BY_ID,
   FURNITURE_CATALOG,
   OUTFIT_OPTIONS,
-  ROOM_GROUPS,
   formatTime,
   type AvatarConfig,
   type ChatMessage,
   type FurnitureItem,
   type OfficeRoom,
+  type RoomKind,
 } from "./office-data";
 import type { PresencePoint } from "./Hud";
+
+const ROOM_GROUPS: Array<{ label: string; kinds: RoomKind[] }> = [
+  {
+    label: "Shared spaces",
+    kinds: ["reception", "lobby", "lounge", "meeting"],
+  },
+  { label: "Channels", kinds: ["channel"] },
+  { label: "Focus pods", kinds: ["focus"] },
+  { label: "Private wing", kinds: ["personal"] },
+  { label: "Areas", kinds: ["area"] },
+];
 
 // ------------------------------------------------------------------ directory
 
@@ -92,6 +103,15 @@ export function RoomDirectory({
     if (playerRoomId) map[playerRoomId] = (map[playerRoomId] ?? 0) + 1;
     return map;
   }, [presence, playerRoomId]);
+
+  const groups = useMemo(
+    () =>
+      ROOM_GROUPS.map(({ label, kinds }) => ({
+        label,
+        rooms: rooms.filter((room) => kinds.includes(room.kind)),
+      })).filter((group) => group.rooms.length > 0),
+    [rooms]
+  );
 
   return (
     <div
@@ -180,7 +200,7 @@ export function RoomDirectory({
               </p>
             )
           ) : (
-            ROOM_GROUPS.map((group) => (
+            groups.map((group) => (
               <div key={group.label} className="mt-4">
                 <div className="flex items-center gap-2 px-2 pb-1.5">
                   <p className="text-[0.58rem] font-extrabold uppercase tracking-[0.2em] text-[#667089]">
@@ -189,24 +209,15 @@ export function RoomDirectory({
                   <span className="h-px flex-1 bg-white/6" />
                 </div>
                 <div className="space-y-1">
-                  {(group.kind
-                    ? rooms
-                        .filter((room) => room.kind === group.kind)
-                        .map((room) => room.id)
-                    : group.ids
-                  ).map((id) => {
-                    const room = rooms.find((entry) => entry.id === id);
-                    if (!room) return null;
-                    return (
-                      <RoomRow
-                        key={room.id}
-                        room={room}
-                        active={room.id === currentRoomId}
-                        people={occupancy[room.id] ?? 0}
-                        onNavigate={() => onNavigate(room.id)}
-                      />
-                    );
-                  })}
+                  {group.rooms.map((room) => (
+                    <RoomRow
+                      key={room.id}
+                      room={room}
+                      active={room.id === currentRoomId}
+                      people={occupancy[room.id] ?? 0}
+                      onNavigate={() => onNavigate(room.id)}
+                    />
+                  ))}
                 </div>
               </div>
             ))

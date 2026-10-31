@@ -272,6 +272,15 @@ const AREA_FALLBACK_ROOM: OfficeRoom = {
   chat: true,
 };
 
+const LOBBY_FALLBACK_ROOM: OfficeRoom = {
+  ...AREA_FALLBACK_ROOM,
+  id: "lobby",
+  kind: "lobby",
+  name: "Lobby",
+  shortName: "Lobby",
+  description: "The shared lobby.",
+};
+
 /**
  * The building's floor plan is fixed; the rooms inside it are real. Each real
  * room takes the next free slot of its kind, so the organisation's own
@@ -310,7 +319,12 @@ function buildRooms(
     // footprint, so they fall back to a neutral template and derive the walk-in
     // point from the bounds the server sends.
     const template =
-      slot ?? (room.kind === "area" ? { ...AREA_FALLBACK_ROOM } : undefined);
+      slot ??
+      (room.kind === "area"
+        ? AREA_FALLBACK_ROOM
+        : room.kind === "lobby"
+          ? LOBBY_FALLBACK_ROOM
+          : undefined);
     if (!template) continue;
 
     // Bounds come from the API (source of truth), in two dimensions. Convert
