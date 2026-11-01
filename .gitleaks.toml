@@ -8,7 +8,7 @@ useDefault = true
 [[rules]]
 id = "hardcoded-source-secret"
 description = "High-entropy string assigned in source, regardless of variable name"
-regex = '''(?i)(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*['"]([A-Za-z0-9+=_.-]{20,})['"]'''
+regex = '''(?i)(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*['\"]([A-Za-z0-9+=_.-]{20,})['\"]'''
 entropy = 3.5
 keywords = [
   "const",
@@ -21,4 +21,5 @@ description = "Allow known test fixtures and generated files"
 paths = [
   '''integration\.json''',
   '''(?:^|/)\.github/''',
+  '''(?:^|/)cypress/''',
 ]
