@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   Building2,
@@ -8,10 +8,12 @@ import {
   ChevronUp,
   Compass,
   DoorOpen,
+  GripHorizontal,
   HelpCircle,
   LogOut,
   Map,
   MessageSquare,
+  Move,
   Palette,
   Sparkles,
   Wrench,
@@ -31,6 +33,19 @@ export interface PresencePoint {
   /** The tint of their in-world avatar, so the tower shows the same person. */
   tint?: string;
 }
+
+export type MapDockCorner =
+  | "bottom-left"
+  | "bottom-right"
+  | "top-right"
+  | "top-left";
+
+export const MAP_CORNER_LABELS: Record<MapDockCorner, string> = {
+  "bottom-left": "Bottom-left",
+  "bottom-right": "Bottom-right",
+  "top-right": "Top-right",
+  "top-left": "Top-left",
+};
 
 interface HudProps {
   room: OfficeRoom | null;
@@ -238,33 +253,16 @@ export default function Hud({
         </div>
       </header>
 
-      <div
-        className={cn(
-          "pointer-events-none absolute left-3 z-30 flex flex-col gap-2 sm:left-5",
-          isMobile ? "bottom-44" : "bottom-3 sm:bottom-5"
-        )}
-      >
-        {mapOpen ? (
-          <Minimap
-            rooms={rooms}
-            currentRoomId={currentRoomId}
-            player={player}
-            presence={presence}
-            onNavigate={onNavigate}
-            onClose={onToggleMap}
-            compact={isMobile}
-          />
-        ) : (
-          <button
-            type="button"
-            className="pointer-events-auto office-glass flex items-center gap-2 rounded-2xl px-3 py-2 text-[0.7rem] font-extrabold uppercase tracking-[0.14em] text-[#b9c1d6]"
-            onClick={onToggleMap}
-          >
-            <Map className="h-4 w-4 text-[#a78bfa]" />
-            Map
-          </button>
-        )}
-      </div>
+      <RepositionableMap
+        mapOpen={mapOpen}
+        onToggleMap={onToggleMap}
+        rooms={rooms}
+        currentRoomId={currentRoomId}
+        player={player}
+        presence={presence}
+        isMobile={isMobile}
+        onNavigate={onNavigate}
+      />
 
       <div className="pointer-events-none absolute bottom-3 left-1/2 z-30 hidden w-full max-w-[38rem] -translate-x-1/2 px-3 sm:bottom-5 md:block">
         {nearZoe ? (
@@ -359,6 +357,258 @@ export default function Hud({
   );
 }
 
+export function RepositionableMap({
+  mapOpen,
+  onToggleMap,
+  rooms,
+  currentRoomId,
+  player,
+  presence,
+  isMobile,
+  onNavigate,
+}: {
+  mapOpen: boolean;
+  onToggleMap: () => void;
+  rooms: OfficeRoom[];
+  currentRoomId: string | null;
+  player: { x: number; z: number; yaw: number };
+  presence: PresencePoint[];
+  isMobile: boolean;
+  onNavigate: (roomId: string) => void;
+}) {
+  const KEY_MAP_POS = "office-map-position-v1";
+  const [mapCorner, setMapCorner] = useState<MapDockCorner>("bottom-left");
+  const [customPos, setCustomPos] = useState<{ x: number; y: number } | null>(
+    null
+  );
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef<{
+    startX: number;
+    startY: number;
+    startLeft: number;
+    startTop: number;
+  } | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(KEY_MAP_POS);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (
+          parsed.corner &&
+          ["bottom-left", "bottom-right", "top-right", "top-left"].includes(
+            parsed.corner
+          )
+        ) {
+          setMapCorner(parsed.corner);
+        }
+        if (
+          parsed.customPos &&
+          typeof parsed.customPos.x === "number" &&
+          typeof parsed.customPos.y === "number"
+        ) {
+          const mapW = isMobile ? 190 : 248;
+          const mapH = 220;
+          const x = Math.max(
+            12,
+            Math.min(parsed.customPos.x, window.innerWidth - mapW - 12)
+          );
+          const y = Math.max(
+            56,
+            Math.min(parsed.customPos.y, window.innerHeight - mapH - 12)
+          );
+          setCustomPos({ x, y });
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, [isMobile]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setCustomPos((prev) => {
+        if (!prev) return null;
+        const mapW = isMobile ? 190 : 248;
+        const mapH = 220;
+        const maxX = Math.max(12, window.innerWidth - mapW - 12);
+        const maxY = Math.max(56, window.innerHeight - mapH - 12);
+        return {
+          x: Math.max(12, Math.min(prev.x, maxX)),
+          y: Math.max(56, Math.min(prev.y, maxY)),
+        };
+      });
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [isMobile]);
+
+  const savePosition = (
+    corner: MapDockCorner,
+    custom: { x: number; y: number } | null
+  ) => {
+    setMapCorner(corner);
+    setCustomPos(custom);
+    try {
+      localStorage.setItem(
+        KEY_MAP_POS,
+        JSON.stringify({ corner, customPos: custom })
+      );
+    } catch {
+      // Ignore storage errors
+    }
+  };
+
+  const cycleCorner = () => {
+    const corners: MapDockCorner[] = [
+      "bottom-left",
+      "bottom-right",
+      "top-right",
+      "top-left",
+    ];
+    const currentIndex = corners.indexOf(mapCorner);
+    const nextCorner = corners[(currentIndex + 1) % corners.length]!;
+    savePosition(nextCorner, null);
+  };
+
+  const handleDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button, a, input")) return;
+    const container = mapContainerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    dragStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startLeft: rect.left,
+      startTop: rect.top,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsDragging(true);
+  };
+
+  const handleDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging || !dragStartRef.current) return;
+    const { startX, startY, startLeft, startTop } = dragStartRef.current;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    const container = mapContainerRef.current;
+    const width = container ? container.offsetWidth : isMobile ? 190 : 248;
+    const height = container ? container.offsetHeight : 220;
+
+    const minX = 12;
+    const maxX = Math.max(minX, window.innerWidth - width - 12);
+    const minY = 56;
+    const maxY = Math.max(minY, window.innerHeight - height - 12);
+
+    const newX = Math.max(minX, Math.min(startLeft + dx, maxX));
+    const newY = Math.max(minY, Math.min(startTop + dy, maxY));
+
+    setCustomPos({ x: newX, y: newY });
+  };
+
+  const handleDragEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    dragStartRef.current = null;
+
+    if (!customPos) return;
+
+    const container = mapContainerRef.current;
+    const width = container ? container.offsetWidth : isMobile ? 190 : 248;
+    const height = container ? container.offsetHeight : 220;
+
+    const snapMargin = 90;
+    const isLeft = customPos.x <= snapMargin;
+    const isRight = customPos.x >= window.innerWidth - width - snapMargin;
+    const isTop = customPos.y <= snapMargin + 48;
+    const isBottom = customPos.y >= window.innerHeight - height - snapMargin;
+
+    if (isLeft && isBottom) {
+      savePosition("bottom-left", null);
+    } else if (isRight && isBottom) {
+      savePosition("bottom-right", null);
+    } else if (isRight && isTop) {
+      savePosition("top-right", null);
+    } else if (isLeft && isTop) {
+      savePosition("top-left", null);
+    } else {
+      savePosition(mapCorner, customPos);
+    }
+  };
+
+  const getCornerClasses = (corner: MapDockCorner) => {
+    switch (corner) {
+      case "bottom-left":
+        return cn(
+          "left-3 sm:left-5",
+          isMobile ? "bottom-44" : "bottom-3 sm:bottom-5"
+        );
+      case "bottom-right":
+        return cn(
+          "right-3 sm:right-5",
+          isMobile ? "bottom-44" : "bottom-20 sm:bottom-24"
+        );
+      case "top-right":
+        return "right-3 sm:right-5 top-16 sm:top-20";
+      case "top-left":
+        return "left-3 sm:left-5 top-16 sm:top-20";
+    }
+  };
+
+  return (
+    <div
+      ref={mapContainerRef}
+      style={
+        customPos
+          ? {
+              left: `${customPos.x}px`,
+              top: `${customPos.y}px`,
+              bottom: "auto",
+              right: "auto",
+              position: "fixed",
+            }
+          : undefined
+      }
+      className={cn(
+        "pointer-events-none fixed z-30 flex flex-col gap-2",
+        !isDragging && !customPos && "transition-all duration-300 ease-out",
+        !customPos && getCornerClasses(mapCorner)
+      )}
+    >
+      {mapOpen ? (
+        <Minimap
+          rooms={rooms}
+          currentRoomId={currentRoomId}
+          player={player}
+          presence={presence}
+          onNavigate={onNavigate}
+          onClose={onToggleMap}
+          compact={isMobile}
+          onDragStart={handleDragStart}
+          onDragMove={handleDragMove}
+          onDragEnd={handleDragEnd}
+          isDragging={isDragging}
+          corner={mapCorner}
+          onCycleCorner={cycleCorner}
+        />
+      ) : (
+        <button
+          type="button"
+          className="pointer-events-auto office-glass flex items-center gap-2 rounded-2xl px-3 py-2 text-[0.7rem] font-extrabold uppercase tracking-[0.14em] text-[#b9c1d6]"
+          onClick={onToggleMap}
+        >
+          <Map className="h-4 w-4 text-[#a78bfa]" />
+          Map
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function Minimap({
   rooms,
   currentRoomId,
@@ -367,6 +617,12 @@ export function Minimap({
   onNavigate,
   onClose,
   compact = false,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+  isDragging = false,
+  corner = "bottom-left",
+  onCycleCorner,
 }: {
   rooms: OfficeRoom[];
   currentRoomId: string | null;
@@ -375,6 +631,12 @@ export function Minimap({
   onNavigate: (roomId: string) => void;
   onClose: () => void;
   compact?: boolean;
+  onDragStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onDragMove?: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onDragEnd?: (e: React.PointerEvent<HTMLDivElement>) => void;
+  isDragging?: boolean;
+  corner?: MapDockCorner;
+  onCycleCorner?: () => void;
 }) {
   const width = compact ? 190 : 248;
   // The map is drawn from the rooms on the floor the user is standing on, so a
@@ -418,21 +680,44 @@ export function Minimap({
       className="office-glass pointer-events-auto overflow-hidden rounded-2xl"
       style={{ width }}
     >
-      <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
-        <div className="flex items-center gap-2">
+      <div
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        onLostPointerCapture={onDragEnd}
+        className={cn(
+          "office-map-drag-handle flex items-center justify-between border-b border-white/8 px-3 py-2 select-none",
+          isDragging ? "cursor-grabbing" : "cursor-grab"
+        )}
+      >
+        <div className="flex items-center gap-2 pointer-events-none">
+          <GripHorizontal className="h-3.5 w-3.5 text-[#77809a]" />
           <Compass className="h-3.5 w-3.5 text-[#a78bfa]" />
           <p className="text-[0.64rem] font-extrabold uppercase tracking-[0.18em] text-[#aeb6cb]">
             Building map
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-[#77809a] transition-colors hover:text-white"
-          aria-label="Close map"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex items-center gap-1.5 pointer-events-auto">
+          {onCycleCorner && (
+            <button
+              type="button"
+              onClick={onCycleCorner}
+              className="text-[#77809a] transition-colors hover:text-white p-0.5 rounded"
+              title={`Dock map to next corner (currently ${MAP_CORNER_LABELS[corner]})`}
+              aria-label="Dock map to next corner"
+            >
+              <Move className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[#77809a] transition-colors hover:text-white p-0.5 rounded"
+            aria-label="Close map"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       <svg
         viewBox={`${frame.minX - frame.pad} ${frame.minZ - frame.pad} ${

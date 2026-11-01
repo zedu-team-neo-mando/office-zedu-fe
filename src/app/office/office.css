@@ -457,6 +457,18 @@
   stroke: rgba(255, 255, 255, 0.8);
 }
 
+.office-map-drag-handle {
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.office-map-drag-handle.dragging,
+.office-map-drag-handle:active {
+  cursor: grabbing;
+}
+
 .office-scroll-area {
   overscroll-behavior: contain;
 }
