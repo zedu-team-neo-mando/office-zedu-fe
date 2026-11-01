@@ -5,12 +5,12 @@
  * them to POST /office/telemetry in batches. Everything is behind the
  * NEXT_PUBLIC_FF_OFFICE_ANALYTICS feature flag, which defaults OFF.
  *
- * The tracker owns the session id (sessionStorage, per tab), the event queue,
- * the flush timer and the pagehide beacon. It never touches React state — the
- * hook layer calls its methods and keeps any UI state.
+ * When the flag is false the tracker is inert: it creates no session identity,
+ * registers no pagehide listener, records no events, and sends nothing. When
+ * the flag is true the tracker owns the session id (sessionStorage, per tab),
+ * the event queue, the flush timer and the pagehide flush. It never touches
+ * React state — the hook layer calls its methods and keeps any UI state.
  */
-
-const FLAG = "NEXT_PUBLIC_FF_OFFICE_ANALYTICS";
 
 const SESSION_STORAGE_KEY = "office_telemetry_session_id";
 const LOCAL_STORAGE_START_KEY = "office_telemetry_session_start";
@@ -35,10 +35,22 @@ const KNOWN_KINDS = new Set([
   "portal.cross",
 ]);
 
+/**
+ * Reads the NEXT_PUBLIC_FF_OFFICE_ANALYTICS feature flag at build time.
+ * Next.js inlines this static expression into browser bundles so the flag
+ * is truly compile-time, not a runtime lookup.
+ */
 function flagOn(): boolean {
-  return typeof process !== "undefined" && process.env[FLAG] === "true";
+  return (
+    typeof process !== "undefined" &&
+    process.env.NEXT_PUBLIC_FF_OFFICE_ANALYTICS === "true"
+  );
 }
 
+/**
+ * Generates a stable UUID per event so retries dedupe correctly on the
+ * backend via ON CONFLICT (event_id).
+ */
 function generateEventId(): string {
   if (
     typeof crypto !== "undefined" &&
@@ -53,6 +65,10 @@ function nowMs(): number {
   return Date.now();
 }
 
+/**
+ * Reads the persisted session start marker from localStorage. Returns null
+ * when storage is unavailable or the marker is missing or malformed.
+ */
 function readStartMarker(): number | null {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_START_KEY);
@@ -64,6 +80,10 @@ function readStartMarker(): number | null {
   }
 }
 
+/**
+ * Persists the session start marker to localStorage. Storage failures are
+ * swallowed so the tracker keeps working in restricted contexts.
+ */
 function writeStartMarker(ms: number): void {
   try {
     localStorage.setItem(LOCAL_STORAGE_START_KEY, String(ms));
@@ -72,6 +92,9 @@ function writeStartMarker(ms: number): void {
   }
 }
 
+/**
+ * Clears the persisted session start marker from localStorage.
+ */
 function clearStartMarker(): void {
   try {
     localStorage.removeItem(LOCAL_STORAGE_START_KEY);
@@ -80,6 +103,10 @@ function clearStartMarker(): void {
   }
 }
 
+/**
+ * Reads the persisted session id from sessionStorage. Returns null when
+ * storage is unavailable or no id exists yet.
+ */
 function readSessionId(): string | null {
   try {
     return sessionStorage.getItem(SESSION_STORAGE_KEY) || null;
@@ -88,6 +115,9 @@ function readSessionId(): string | null {
   }
 }
 
+/**
+ * Persists the session id to sessionStorage. Storage failures are swallowed.
+ */
 function writeSessionId(id: string): void {
   try {
     sessionStorage.setItem(SESSION_STORAGE_KEY, id);
@@ -120,7 +150,40 @@ interface TrackerOptions {
 }
 
 /**
- * The tracker. One instance per tab per live session.
+ * Builds the JSON request payload for a batch of telemetry events. Shared by
+ * the periodic flush and the pagehide flush so both paths send identical
+ * shapes.
+ */
+function buildPayload(
+  sessionId: string,
+  startedAt: number,
+  entryPoint: string,
+  events: TelemetryEvent[]
+) {
+  return {
+    session: {
+      sessionId,
+      mode: "live",
+      entryPoint,
+      startedAt: new Date(startedAt).toISOString(),
+    },
+    events: events.map((e) => ({
+      eventId: e.eventId,
+      kind: e.kind,
+      offsetMs: e.offsetMs,
+      floorIndex: e.floorIndex,
+      roomKind: e.roomKind,
+      roomRef: e.roomRef,
+      dwellMs: e.dwellMs,
+      via: e.via,
+    })),
+  };
+}
+
+/**
+ * The tracker. One instance per tab per live session. When the analytics
+ * flag is off the constructor performs no work — no storage access, no
+ * listener registration, no timer — so the tracker is fully inert.
  */
 class TelemetryTracker {
   private sessionId: string;
@@ -141,11 +204,30 @@ class TelemetryTracker {
   private dwellStartMs: number = 0;
   private inTower: boolean = false;
 
+  // The room that was active when the tower opened, so towerClosed can
+  // re-enter it and resume dwell tracking without a new room-entry callback.
+  private towerPrecedingRoom: {
+    id: string | null;
+    kind: string;
+    ref: string;
+    floor: number;
+  } | null = null;
+
   // Portal suppression — a portal crossing emits two room changes
   // (departure + arrival). The second one must not generate a dwell pair.
   private suppressNextDwellPair = false;
 
   constructor(opts: TrackerOptions = {}) {
+    this.pagehideBound = this.onPagehide.bind(this);
+
+    if (!flagOn()) {
+      // Inert when analytics is disabled: no storage, no listener, no timer.
+      this.sessionId = "";
+      this.startedAt = 0;
+      this.entryPoint = "";
+      return;
+    }
+
     this.sessionId = readSessionId() ?? generateEventId();
     writeSessionId(this.sessionId);
 
@@ -167,8 +249,12 @@ class TelemetryTracker {
     this.scheduleFlush();
   }
 
-  /** Call once when entering a live office session. */
+  /**
+   * Call once when entering a live office session. No-op when analytics is
+   * disabled.
+   */
   start(session: TelemetrySession): void {
+    if (!flagOn()) return;
     this.sessionId = session.sessionId;
     writeSessionId(this.sessionId);
     this.startedAt = session.startedAt;
@@ -185,7 +271,10 @@ class TelemetryTracker {
     });
   }
 
-  /** Call when the scene reports a room change. `room` is null for corridor. */
+  /**
+   * Call when the scene reports a room change. `room` is null for corridor.
+   * No-op when analytics is disabled.
+   */
   roomChanged(
     roomId: string | null,
     roomKind: string,
@@ -193,6 +282,7 @@ class TelemetryTracker {
     floorIndex: number,
     via: string
   ): void {
+    if (!flagOn()) return;
     // If the tower is open, room detection from the engine does not run — the
     // tower is the active place and we already closed the dwell on tower.open.
     if (this.inTower) return;
@@ -257,8 +347,12 @@ class TelemetryTracker {
     }
   }
 
-  /** Call when a portal crossing happens. Emits portal.cross only, no dwell. */
+  /**
+   * Call when a portal crossing happens. Emits portal.cross only, no dwell.
+   * No-op when analytics is disabled.
+   */
   portalCross(via: string): void {
+    if (!flagOn()) return;
     this.record({
       kind: "portal.cross",
       offsetMs: nowMs() - this.startedAt,
@@ -272,8 +366,11 @@ class TelemetryTracker {
     this.suppressNextDwellPair = true;
   }
 
-  /** Call when the floor changes. */
+  /**
+   * Call when the floor changes. No-op when analytics is disabled.
+   */
   floorChanged(floorIndex: number): void {
+    if (!flagOn()) return;
     this.record({
       kind: "floor.enter",
       offsetMs: nowMs() - this.startedAt,
@@ -286,9 +383,21 @@ class TelemetryTracker {
     this.currentFloorIndex = floorIndex;
   }
 
-  /** Call when the tower opens — close the current room dwell. */
+  /**
+   * Call when the tower opens — close the current room dwell. No-op when
+   * analytics is disabled.
+   */
   towerOpened(): void {
+    if (!flagOn()) return;
     this.inTower = true;
+    // Remember the room that was active before the tower opened so we can
+    // re-enter it when the tower closes, without needing a new callback.
+    this.towerPrecedingRoom = {
+      id: this.currentRoomId,
+      kind: this.currentRoomKind,
+      ref: this.currentRoomRef,
+      floor: this.currentFloorIndex,
+    };
     if (this.currentRoomId !== null) {
       const dwellMs = Math.max(0, nowMs() - this.dwellStartMs);
       this.record({
@@ -307,12 +416,42 @@ class TelemetryTracker {
     }
   }
 
-  /** Call when the tower closes — the floor view resumes room detection. */
+  /**
+   * Call when the tower closes — the floor view resumes room detection.
+   * No-op when analytics is disabled.
+   */
   towerClosed(): void {
+    if (!flagOn()) return;
     this.inTower = false;
+    // Resume dwell tracking for the room that was active before the tower
+    // opened, so tracking restarts even when the player closes the tower
+    // without changing rooms — no new room-entry callback required.
+    const preceding = this.towerPrecedingRoom;
+    this.towerPrecedingRoom = null;
+    if (preceding) {
+      this.currentRoomId = preceding.id;
+      this.currentRoomKind = preceding.kind;
+      this.currentRoomRef = preceding.ref;
+      this.currentFloorIndex = preceding.floor;
+      this.dwellStartMs = nowMs();
+      if (preceding.id !== null && preceding.id !== "") {
+        this.record({
+          kind: "room.enter",
+          offsetMs: nowMs() - this.startedAt,
+          floorIndex: preceding.floor,
+          roomKind: preceding.kind,
+          roomRef: preceding.ref,
+          dwellMs: 0,
+          via: "",
+        });
+      }
+    }
   }
 
-  /** Teleport entry points tag their own arrival via (directory / tower). */
+  /**
+   * Teleport entry points tag their own arrival via (directory / tower).
+   * No-op when analytics is disabled.
+   */
   teleportArrive(
     roomId: string,
     roomKind: string,
@@ -320,10 +459,12 @@ class TelemetryTracker {
     floorIndex: number,
     via: string
   ): void {
+    if (!flagOn()) return;
     this.roomChanged(roomId, roomKind, roomRef, floorIndex, via);
   }
 
   private record(event: Omit<TelemetryEvent, "eventId">): void {
+    if (!flagOn()) return;
     if (this.stopped) return;
     if (!KNOWN_KINDS.has(event.kind)) return;
 
@@ -342,6 +483,7 @@ class TelemetryTracker {
   }
 
   private scheduleFlush(): void {
+    if (!flagOn()) return;
     if (this.flushTimer !== null) {
       clearTimeout(this.flushTimer);
     }
@@ -354,6 +496,7 @@ class TelemetryTracker {
 
   /** Flush the queue now — public for tests and for pagehide. */
   public async flush(): Promise<void> {
+    if (!flagOn()) return;
     if (this.stopped || this.queue.length === 0) return;
     if (this.failedFlushes >= MAX_FAILED_FLUSHES) return;
 
@@ -372,27 +515,19 @@ class TelemetryTracker {
     }
   }
 
+  /**
+   * Sends a batch of events to the telemetry endpoint. Returns true when the
+   * server accepted the batch. No-op when analytics is disabled.
+   */
   private async sendBatch(events: TelemetryEvent[]): Promise<boolean> {
     if (!flagOn()) return false;
 
-    const payload = {
-      session: {
-        sessionId: this.sessionId,
-        mode: "live",
-        entryPoint: this.entryPoint,
-        startedAt: new Date(this.startedAt).toISOString(),
-      },
-      events: events.map((e) => ({
-        eventId: e.eventId,
-        kind: e.kind,
-        offsetMs: e.offsetMs,
-        floorIndex: e.floorIndex,
-        roomKind: e.roomKind,
-        roomRef: e.roomRef,
-        dwellMs: e.dwellMs,
-        via: e.via,
-      })),
-    };
+    const payload = buildPayload(
+      this.sessionId,
+      this.startedAt,
+      this.entryPoint,
+      events
+    );
 
     try {
       const res = await fetch(TELEMETRY_URL, {
@@ -410,8 +545,13 @@ class TelemetryTracker {
     }
   }
 
-  /** Pagehide: flush the last room.leave + session.end via sendBeacon. */
+  /**
+   * Pagehide: flush the last room.leave + session.end via fetch with
+   * keepalive, reusing the same request builder as sendBatch. No-op when
+   * analytics is disabled.
+   */
   private onPagehide(): void {
+    if (!flagOn()) return;
     if (this.stopped) return;
 
     // Close the current room dwell.
@@ -448,33 +588,32 @@ class TelemetryTracker {
     const remaining = this.queue.splice(0, this.queue.length);
     if (remaining.length === 0) return;
 
-    const payload = {
-      session: {
-        sessionId: this.sessionId,
-        mode: "live",
-        entryPoint: this.entryPoint,
-        startedAt: new Date(this.startedAt).toISOString(),
-      },
-      events: remaining.map((e) => ({
-        eventId: e.eventId,
-        kind: e.kind,
-        offsetMs: e.offsetMs,
-        floorIndex: e.floorIndex,
-        roomKind: e.roomKind,
-        roomRef: e.roomRef,
-        dwellMs: e.dwellMs,
-        via: e.via,
-      })),
-    };
+    const payload = buildPayload(
+      this.sessionId,
+      this.startedAt,
+      this.entryPoint,
+      remaining
+    );
 
     try {
-      navigator.sendBeacon(TELEMETRY_URL, JSON.stringify(payload));
+      void fetch(TELEMETRY_URL, {
+        method: "POST",
+        keepalive: true,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${typeof localStorage !== "undefined" ? localStorage.getItem("token") || "" : ""}`,
+        },
+        body: JSON.stringify(payload),
+      });
     } catch {
-      // Beacon unavailable — the batch is dropped.
+      // Fetch unavailable — the batch is dropped.
     }
   }
 
-  /** Stop the tracker and clear the pagehide listener. */
+  /**
+   * Stop the tracker and clear the pagehide listener. Clears the shared
+   * trackerInstance so the next getTracker() call creates a fresh tracker.
+   */
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
@@ -484,6 +623,9 @@ class TelemetryTracker {
     }
     if (typeof window !== "undefined") {
       window.removeEventListener("pagehide", this.pagehideBound);
+    }
+    if (trackerInstance === this) {
+      trackerInstance = null;
     }
     clearStartMarker();
   }
@@ -495,6 +637,10 @@ class TelemetryTracker {
 
 let trackerInstance: TelemetryTracker | null = null;
 
+/**
+ * Returns the singleton tracker, creating it on first call. When analytics
+ * is disabled the returned tracker is inert — all methods are no-ops.
+ */
 export function getTracker(opts?: TrackerOptions): TelemetryTracker {
   if (!trackerInstance) {
     trackerInstance = new TelemetryTracker(opts);
@@ -502,6 +648,10 @@ export function getTracker(opts?: TrackerOptions): TelemetryTracker {
   return trackerInstance;
 }
 
+/**
+ * Stops the active tracker and clears the singleton so tests can create a
+ * fresh tracker.
+ */
 export function resetTrackerForTests(): void {
   if (trackerInstance) {
     trackerInstance.stop();

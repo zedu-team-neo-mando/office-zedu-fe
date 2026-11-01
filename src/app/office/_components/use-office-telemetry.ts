@@ -36,7 +36,7 @@ export function useOfficeTelemetry({
     trackerRef.current = tracker;
 
     const session: TelemetrySession = {
-      sessionId: trackerInstanceSessionId(),
+      sessionId: trackerInstanceSessionId(tracker),
       mode: "live",
       entryPoint: "lobby",
       startedAt: startedAtRef.current,
@@ -45,6 +45,12 @@ export function useOfficeTelemetry({
     startedRef.current = true;
 
     return () => {
+      // Finalize the session and deliver queued events before stopping,
+      // so client-side unmounts emit room.leave and session.end without
+      // relying on pagehide.
+      if (trackerRef.current) {
+        void trackerRef.current.flush();
+      }
       tracker.stop();
       trackerRef.current = null;
       startedRef.current = false;
@@ -115,12 +121,33 @@ export function useOfficeTelemetry({
   };
 }
 
-/** Read the session id the tracker already persisted to sessionStorage. */
-function trackerInstanceSessionId(): string {
-  if (typeof sessionStorage === "undefined") return "unknown";
-  const existing = sessionStorage.getItem("office_telemetry_session_id");
-  if (existing) return existing;
-  const generated = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-  sessionStorage.setItem("office_telemetry_session_id", generated);
-  return generated;
+/**
+ * Reads the session id the tracker already persisted to sessionStorage,
+ * falling back to a generated id when storage is unavailable. Storage
+ * failures do not propagate into the live-office effect.
+ */
+function trackerInstanceSessionId(
+  tracker: ReturnType<typeof getTracker>
+): string {
+  if (typeof sessionStorage === "undefined") return trackerSessionIdFallback();
+  try {
+    const existing = sessionStorage.getItem("office_telemetry_session_id");
+    if (existing) return existing;
+  } catch {
+    // Storage unavailable — fall through to generated id.
+  }
+  return trackerSessionIdFallback();
+}
+
+/**
+ * Generates a fallback session id when sessionStorage is unavailable.
+ */
+function trackerSessionIdFallback(): string {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random()}`;
 }

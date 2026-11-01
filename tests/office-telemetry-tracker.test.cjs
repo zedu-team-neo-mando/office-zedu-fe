@@ -239,6 +239,7 @@ test("queue capped at 100 events", async () => {
   sessionStore.clear();
   localStore.clear();
   global.capturedPayloads = [];
+  global.fetchShouldFail = true; // flushes fail, queue builds up
   const t = await loadTracker();
   t.start({
     sessionId: "sess-9",
@@ -251,6 +252,7 @@ test("queue capped at 100 events", async () => {
   }
   if (t.queueLength() > 100)
     fail(`queue capped at 100, got ${t.queueLength()}`);
+  global.fetchShouldFail = false;
   t.stop();
 });
 
@@ -285,7 +287,16 @@ test("unknown event kinds are skipped, not rejected", async () => {
     entryPoint: "lobby",
     startedAt: Date.now(),
   });
-  t.roomChanged("reception", "reception", "reception", 0, "walk");
+  // Record an unknown kind directly through the private method.
+  t["record"]({
+    kind: "unknown.kind",
+    offsetMs: 0,
+    floorIndex: 0,
+    roomKind: "",
+    roomRef: "",
+    dwellMs: 0,
+    via: "",
+  });
   await t.flush();
   const all = global.capturedPayloads.flatMap((p) => p.events);
   const kinds = all.map((e) => e.kind);

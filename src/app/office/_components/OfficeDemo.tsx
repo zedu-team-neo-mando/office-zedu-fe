@@ -1238,6 +1238,11 @@ export default function OfficeDemo({
 
   // ------------------------------------------------------------------- handlers
 
+  /**
+   * Handles a room change from the engine. Resets editor state, updates the
+   * active room, and reports corridor exits to telemetry so dwell is recorded
+   * when leaving a room into the corridor.
+   */
   function handleRoomChange(room: typeof currentRoom) {
     const state = stateRef.current;
     const previousId = state.roomId;
@@ -1260,6 +1265,13 @@ export default function OfficeDemo({
     setChatTargetId(null);
     setRoomId(nextId);
 
+    // Forward corridor exits to telemetry so dwell is recorded when leaving
+    // a room into the corridor. Destination-room entries are reported by
+    // handleEntered below.
+    if (!room) {
+      telemetry.roomChanged(null, "", "", 0, "walk");
+    }
+
     if (!room) {
       setChatOpen(false);
     } else if (room.kind === "channel") {
@@ -1268,18 +1280,22 @@ export default function OfficeDemo({
     }
   }
 
-  // Focus mode is only announced once the server has let the player into the
-  // pod, so someone turned away from a full pod is never told it is on.
+  /**
+   * Handles the player entering a room. Announces focus mode and reports the
+   * entered room to telemetry, resolved from roomById so the corridor (null
+   * room) is never recorded as a room entry.
+   */
   function handleEntered(enteredId: string) {
     if (roomById[enteredId]?.kind === "focus") {
       showInfo("Focus mode", "Your status is now Do not disturb.");
     }
 
+    const enteredRoom = roomById[enteredId];
     telemetry.roomChanged(
-      room?.id ?? null,
-      room?.kind ?? "",
-      room?.refId ?? "",
-      room?.floorIndex ?? 0,
+      enteredRoom?.id ?? null,
+      enteredRoom?.kind ?? "",
+      enteredRoom?.refId ?? "",
+      enteredRoom?.floorIndex ?? 0,
       pendingTeleportRef.current?.via ?? "walk"
     );
     pendingTeleportRef.current = null;
@@ -1303,6 +1319,11 @@ export default function OfficeDemo({
     telemetry.towerOpened();
   }
 
+  /**
+   * Closes the tower view and resumes dwell tracking for the room that was
+   * active before the tower opened, so tracking restarts without requiring a
+   * new room-entry callback.
+   */
   function closeTower() {
     engineRef.current?.setView("floor");
     setTowerOpen(false);
@@ -1360,6 +1381,7 @@ export default function OfficeDemo({
     setLiftTarget(floorIndex);
     pendingTeleportRef.current = { roomId: targetId, via: "tower" };
     schedule(() => {
+      telemetry.towerClosed();
       engine.setView("floor");
       engine.focusRoom(targetId);
       setRoomId(targetId);
