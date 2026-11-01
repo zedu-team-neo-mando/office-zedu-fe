@@ -7,10 +7,10 @@ settings:
 overrides:
   react-email>next: 16.4.1
   cheerio: 1.0.0-rc.12
-  axios: 1.14.0
+  axios: 1.20.0
   dompurify: 3.4.17
-  undici: 5.28.5
-  fast-uri: 3.0.0
+  undici: 6.29.1
+  fast-uri: 3.1.7
   lodash@<4.17.12: 4.17.21
   underscore@<1.12.1: 1.13.8
   handlebars@<4.7.10: 4.7.10
@@ -217,8 +217,8 @@ importers:
         specifier: ^2.3.4
         version: 2.3.4
       axios:
-        specifier: 1.14.0
-        version: 1.14.0
+        specifier: 1.20.0
+        version: 1.20.0
       browser-image-compression:
         specifier: 2.0.2
         version: 2.0.2
@@ -292,8 +292,8 @@ importers:
         specifier: ^1.17.8
         version: 1.20.0(next@16.4.1(@babel/core@7.24.5)(@opentelemetry/api@1.9.0)(@types/node@20.19.43)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.101.0))
       open-graph-scraper:
-        specifier: 6.3.0
-        version: 6.3.0
+        specifier: 6.9.0
+        version: 6.9.0
       prismjs:
         specifier: ^1.30.0
         version: 1.30.0
@@ -1687,13 +1687,6 @@ packages:
         integrity: sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA==,
       }
     engines: { node: ^18.18.0 || ^20.9.0 || >=21.1.0 }
-
-  "@fastify/busboy@2.1.1":
-    resolution:
-      {
-        integrity: sha512-vBZP4NlzfOlerQTnba4aqZoMhE/a9HY7HRqoOPaETQcSQuWEIyZMHGfVu6w9wGtGK5fED5qRs2DteVCjOH60sA==,
-      }
-    engines: { node: ">=14" }
 
   "@floating-ui/core@1.7.5":
     resolution:
@@ -5832,6 +5825,13 @@ packages:
     engines: { node: ">=0.8" }
     hasBin: true
 
+  agent-base@6.0.2:
+    resolution:
+      {
+        integrity: sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==,
+      }
+    engines: { node: ">= 6.0.0" }
+
   agent-base@7.1.4:
     resolution:
       {
@@ -6229,10 +6229,10 @@ packages:
       }
     engines: { node: ">=4" }
 
-  axios@1.14.0:
+  axios@1.20.0:
     resolution:
       {
-        integrity: sha512-3Y8yrqLSwjuzpXuZ0oIYZ/XGgLwUIBU3uLvbcpb0pidD9ctpShJd43KSlEEkVQg6DS0G9NKyzOvBfUtDKEyHvQ==,
+        integrity: sha512-r8aOh8j9cGKpgQAqpzrUHnSIc6a59Y3Xf/cv8sy1DrHCkZHzQGEuoq1tARk6qSyDdtQGSDgpb9kFlruzPvrgwg==,
       }
 
   axobject-query@4.1.0:
@@ -8619,10 +8619,10 @@ packages:
         integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==,
       }
 
-  fast-uri@3.0.0:
+  fast-uri@3.1.7:
     resolution:
       {
-        integrity: sha512-zv72gAcgHJjkq7h2IHzRB1Hg+9QIy9+IHmy2wBlmZnG1T7CfdfSjLXotI0vhq4T4Fqg31zkg+Dp2Dj8iFM6ULw==,
+        integrity: sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg==,
       }
 
   fastq@1.20.1:
@@ -9460,6 +9460,13 @@ packages:
         integrity: sha512-JrF8SSLVmcvc5NducxgyOrKXe3EsyHMgBFgSaIUGmArKe+rwr0uphRkRXvwiom3I+fpIfoItveHrfudL8/rxuA==,
       }
     engines: { node: ">=16" }
+
+  https-proxy-agent@5.0.1:
+    resolution:
+      {
+        integrity: sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==,
+      }
+    engines: { node: ">= 6" }
 
   https-proxy-agent@7.0.6:
     resolution:
@@ -11822,10 +11829,10 @@ packages:
         integrity: sha512-csuQ9x3Yr0cEIs/Zgx/OEt9iBw9vqIunAPQkx19R/fiMq2oGVTgcMqO/V3Ybqefr1TBvosI6jU539ksaBULJyA==,
       }
 
-  open-graph-scraper@6.3.0:
+  open-graph-scraper@6.9.0:
     resolution:
       {
-        integrity: sha512-Kl8Xkigvw20ZppXt1m2RCucGo/L3ZsgtThZyE5CS4GJr5MrxDz7wQN7iaO/wkM3JuiP5XzblZ3gIpLIsC9dhQw==,
+        integrity: sha512-1KoV5v6GT0/MqlryrVGQROhEAD4u8wC3VjYOxsnhj3mWeGJ6N6nF/rbrcZREFr+kiYm9I5LMrzdK9t9hBMbL2Q==,
       }
     engines: { node: ">=18.0.0" }
 
@@ -14831,12 +14838,12 @@ packages:
         integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==,
       }
 
-  undici@5.28.5:
+  undici@6.29.1:
     resolution:
       {
-        integrity: sha512-zICwjrDrcrUE0pyyJc1I2QzBkLM8FINsgOrt6WjA+BgajVq9Nxu2PbFFXUrAggLfDXlZGZBVZYw7WNV5KiBiBA==,
+        integrity: sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==,
       }
-    engines: { node: ">=14.0" }
+    engines: { node: ">=18.17" }
 
   unicode-emoji-modifier-base@1.0.0:
     resolution:
@@ -15103,13 +15110,6 @@ packages:
       {
         integrity: sha512-DpKm2Ui/xN7/HQKCtpZxoRWBhZ9Z0kqtygG8XCgNQ8ZlDnxuQmWhj566j8fN4Cu3/JmbhsDo7fcAJq4s9h27Ew==,
       }
-
-  validator@13.15.35:
-    resolution:
-      {
-        integrity: sha512-TQ5pAGhd5whStmqWvYF4OjQROlmv9SMFVt37qoCBdqRffuuklWYQlCNnEs2ZaIBD1kZRNnikiZOS1eqgkar0iw==,
-      }
-    engines: { node: ">= 0.10" }
 
   vary@1.1.2:
     resolution:
@@ -15541,10 +15541,11 @@ snapshots:
       "@agora-js/report": 4.24.4
       "@agora-js/shared": 4.24.4
       agora-rte-extension: 1.2.4
-      axios: 1.14.0
+      axios: 1.20.0
       webrtc-adapter: 8.2.0
     transitivePeerDependencies:
       - debug
+      - supports-color
 
   "@agora-js/protocol@4.24.4":
     dependencies:
@@ -15556,20 +15557,23 @@ snapshots:
       pako: 2.1.0
     transitivePeerDependencies:
       - debug
+      - supports-color
 
   "@agora-js/report@4.24.4":
     dependencies:
       "@agora-js/shared": 4.24.4
-      axios: 1.14.0
+      axios: 1.20.0
     transitivePeerDependencies:
       - debug
+      - supports-color
 
   "@agora-js/shared@4.24.4":
     dependencies:
-      axios: 1.14.0
+      axios: 1.20.0
       ua-parser-js: 0.7.41
     transitivePeerDependencies:
       - debug
+      - supports-color
 
   "@ai-sdk/gateway@2.0.103(zod@4.4.3)":
     dependencies:
@@ -16318,8 +16322,6 @@ snapshots:
     dependencies:
       "@eslint/core": 0.17.0
       levn: 0.4.1
-
-  "@fastify/busboy@2.1.1": {}
 
   "@floating-ui/core@1.7.5":
     dependencies:
@@ -19090,6 +19092,12 @@ snapshots:
       exit-on-epipe: 1.0.1
       printj: 1.1.2
 
+  agent-base@6.0.2:
+    dependencies:
+      debug: 4.4.3(supports-color@8.1.1)
+    transitivePeerDependencies:
+      - supports-color
+
   agent-base@7.1.4: {}
 
   aggregate-error@3.1.0:
@@ -19109,13 +19117,14 @@ snapshots:
       "@agora-js/report": 4.24.4
       "@agora-js/shared": 4.24.4
       agora-rte-extension: 1.2.4
-      axios: 1.14.0
+      axios: 1.20.0
       formdata-polyfill: 4.0.10
       pako: 2.1.0
       ua-parser-js: 0.7.41
       webrtc-adapter: 8.2.0
     transitivePeerDependencies:
       - debug
+      - supports-color
 
   agora-rte-extension@1.2.4: {}
 
@@ -19163,7 +19172,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 3.0.0
+      fast-uri: 3.1.7
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -19351,13 +19360,15 @@ snapshots:
 
   axe-core@4.12.1: {}
 
-  axios@1.14.0:
+  axios@1.20.0:
     dependencies:
       follow-redirects: 1.16.0
       form-data: 4.0.6
+      https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
     transitivePeerDependencies:
       - debug
+      - supports-color
 
   axobject-query@4.1.0: {}
 
@@ -20967,7 +20978,7 @@ snapshots:
 
   fast-levenshtein@2.0.6: {}
 
-  fast-uri@3.0.0: {}
+  fast-uri@3.1.7: {}
 
   fastq@1.20.1:
     dependencies:
@@ -21556,6 +21567,13 @@ snapshots:
       sshpk: 1.18.0
 
   http_ece@1.2.0: {}
+
+  https-proxy-agent@5.0.1:
+    dependencies:
+      agent-base: 6.0.2
+      debug: 4.4.3(supports-color@8.1.1)
+    transitivePeerDependencies:
+      - supports-color
 
   https-proxy-agent@7.0.6:
     dependencies:
@@ -23119,12 +23137,12 @@ snapshots:
       regex: 6.1.0
       regex-recursion: 6.0.2
 
-  open-graph-scraper@6.3.0:
+  open-graph-scraper@6.9.0:
     dependencies:
       chardet: 2.2.0
       cheerio: 1.0.0-rc.12
-      undici: 5.28.5
-      validator: 13.15.35
+      iconv-lite: 0.6.3
+      undici: 6.29.1
 
   option@0.2.4: {}
 
@@ -25387,9 +25405,7 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici@5.28.5:
-    dependencies:
-      "@fastify/busboy": 2.1.1
+  undici@6.29.1: {}
 
   unicode-emoji-modifier-base@1.0.0: {}
 
@@ -25573,8 +25589,6 @@ snapshots:
     dependencies:
       spdx-correct: 3.2.0
       spdx-expression-parse: 3.0.1
-
-  validator@13.15.35: {}
 
   vary@1.1.2: {}
 
