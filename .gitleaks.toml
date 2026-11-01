@@ -22,3 +22,8 @@ paths = [
   '''integration\.json''',
   '''(?:^|/)\.github/''',
 ]
+regexes = [
+  # localStorage key names used by the demo office source (KEY_LAYOUTS /
+  # KEY_AVATAR), not credentials.
+  '''^office-demo-(?:layouts|avatar)-v\d+$''',
+]
