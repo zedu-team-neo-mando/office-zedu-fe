@@ -33,6 +33,7 @@ import {
 import { demoSource, demoTowerOffices } from "./demo-office-source";
 import { useOfficePresence } from "./use-office-presence";
 import { OfficeEntryError, isRoomFullError } from "./office-entry";
+import { useOfficeTelemetry } from "./use-office-telemetry";
 import type {
   OfficeOccupant,
   OfficeSource,
@@ -411,6 +412,10 @@ export default function OfficeDemo({
   const dirtyLayoutsRef = useRef(new Map<string, FurnitureItem[]>());
   const queuedLayoutsRef = useRef(new Map<string, FurnitureItem[]>());
   const saveQueueRef = useRef(Promise.resolve());
+  /** A tower dive that is mid-teleport; tags the next room change as via: tower. */
+  const pendingTeleportRef = useRef<{ roomId: string; via: string } | null>(
+    null
+  );
 
   const currentRoom = roomId ? (roomById[roomId] ?? null) : null;
   const currentItems = currentRoom ? (layouts[currentRoom.id] ?? []) : [];
@@ -637,7 +642,10 @@ export default function OfficeDemo({
             handlersRef.current?.onGhostState?.(valid, reason),
           onTowerPick: (office) => handlersRef.current?.onTowerPick?.(office),
           onTowerHover: (office) => handlersRef.current?.onTowerHover?.(office),
-          onFloorChange: (floorIndex) => setActiveFloor(floorIndex),
+          onFloorChange: (floorIndex) => {
+            setActiveFloor(floorIndex);
+            telemetry.floorChanged(floorIndex);
+          },
           onDoorProximity: (roomId) =>
             handlersRef.current?.onDoorProximity?.(roomId),
         },
@@ -1160,6 +1168,13 @@ export default function OfficeDemo({
     onEntered: (enteredId) => handleEntered(enteredId),
   });
 
+  // Telemetry — live mode only, behind the feature flag. The tracker is a pure
+  // module; this hook owns the React side and wraps the engine callbacks.
+  const telemetry = useOfficeTelemetry({
+    source,
+    active: phase === "office",
+  });
+
   // A room being read is a room whose conversation matters: the one you are
   // standing in, or the one held in frame from the street.
   const readRoomId = towerPreview ?? chatTargetId ?? roomId;
@@ -1223,6 +1238,11 @@ export default function OfficeDemo({
 
   // ------------------------------------------------------------------- handlers
 
+  /**
+   * Handles a room change from the engine. Resets editor state, updates the
+   * active room, and reports corridor exits to telemetry so dwell is recorded
+   * when leaving a room into the corridor.
+   */
   function handleRoomChange(room: typeof currentRoom) {
     const state = stateRef.current;
     const previousId = state.roomId;
@@ -1245,6 +1265,13 @@ export default function OfficeDemo({
     setChatTargetId(null);
     setRoomId(nextId);
 
+    // Forward corridor exits to telemetry so dwell is recorded when leaving
+    // a room into the corridor. Destination-room entries are reported by
+    // handleEntered below.
+    if (!room) {
+      telemetry.roomChanged(null, "", "", 0, "walk");
+    }
+
     if (!room) {
       setChatOpen(false);
     } else if (room.kind === "channel") {
@@ -1253,12 +1280,25 @@ export default function OfficeDemo({
     }
   }
 
-  // Focus mode is only announced once the server has let the player into the
-  // pod, so someone turned away from a full pod is never told it is on.
+  /**
+   * Handles the player entering a room. Announces focus mode and reports the
+   * entered room to telemetry, resolved from roomById so the corridor (null
+   * room) is never recorded as a room entry.
+   */
   function handleEntered(enteredId: string) {
     if (roomById[enteredId]?.kind === "focus") {
       showInfo("Focus mode", "Your status is now Do not disturb.");
     }
+
+    const enteredRoom = roomById[enteredId];
+    telemetry.roomChanged(
+      enteredRoom?.id ?? null,
+      enteredRoom?.kind ?? "",
+      enteredRoom?.refId ?? "",
+      enteredRoom?.floorIndex ?? 0,
+      pendingTeleportRef.current?.via ?? "walk"
+    );
+    pendingTeleportRef.current = null;
   }
 
   // ---------------------------------------------------------------- the tower
@@ -1276,8 +1316,14 @@ export default function OfficeDemo({
     setMapOpen(false);
     setDirectoryOpen(false);
     setChatOpen(false);
+    telemetry.towerOpened();
   }
 
+  /**
+   * Closes the tower view and resumes dwell tracking for the room that was
+   * active before the tower opened, so tracking restarts without requiring a
+   * new room-entry callback.
+   */
   function closeTower() {
     engineRef.current?.setView("floor");
     setTowerOpen(false);
@@ -1285,6 +1331,7 @@ export default function OfficeDemo({
     setTowerPreview(null);
     setLiftTarget(null);
     setTowerFocus(null);
+    telemetry.towerClosed();
   }
 
   function showWholeTower() {
@@ -1332,7 +1379,9 @@ export default function OfficeDemo({
     }
 
     setLiftTarget(floorIndex);
+    pendingTeleportRef.current = { roomId: targetId, via: "tower" };
     schedule(() => {
+      telemetry.towerClosed(false);
       engine.setView("floor");
       engine.focusRoom(targetId);
       setRoomId(targetId);
