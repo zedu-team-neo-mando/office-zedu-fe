@@ -9,7 +9,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import type { OfficeZoeHistoryMessage } from "~/types/office";
 import { ZOE_GREETING, ZOE_QUICK_CHIPS } from "./office-data";
+
+/** The newest completed turns sent with each question, matching the route cap. */
+const HISTORY_LIMIT = 8;
 
 interface ZoeMessage {
   id: string;
@@ -28,7 +32,10 @@ export default function ZoeDialog({
   open: boolean;
   roomName: string;
   nearby: string[];
-  ask: (question: string) => Promise<string>;
+  ask: (
+    question: string,
+    history: OfficeZoeHistoryMessage[]
+  ) => Promise<string>;
   onClose: () => void;
 }) {
   const [messages, setMessages] = useState<ZoeMessage[]>([]);
@@ -87,6 +94,18 @@ export default function ZoeDialog({
       content: text,
     };
     const answerId = `z-${Date.now()}`;
+    // The dialog already holds the thread, so send the newest completed turns
+    // with the question instead of letting Zoe forget the conversation. The
+    // greeting is scene copy, not something the assistant said.
+    const history: OfficeZoeHistoryMessage[] = messages
+      .filter(
+        (message) =>
+          message.id !== "zoe-greeting" &&
+          !message.streaming &&
+          message.content.trim().length > 0
+      )
+      .slice(-HISTORY_LIMIT)
+      .map(({ role, content }) => ({ role, content }));
     setMessages((prev) => [...prev, userMessage]);
     setDraft("");
     setThinking(true);
@@ -94,7 +113,7 @@ export default function ZoeDialog({
     timeoutRef.current = window.setTimeout(() => {
       setThinking(false);
 
-      ask(text)
+      ask(text, history)
         .then((answer) => {
           setMessages((prev) => [
             ...prev,

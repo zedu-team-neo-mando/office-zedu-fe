@@ -37,6 +37,7 @@ import type {
   OfficeOccupant,
   OfficeSource,
   OfficeZoeContext,
+  OfficeZoeHistoryMessage,
 } from "~/types/office";
 import {
   OfficeEngine,
@@ -1962,7 +1963,10 @@ export default function OfficeDemo({
     );
   }
 
-  async function askZoe(question: string): Promise<string> {
+  async function askZoe(
+    question: string,
+    history: OfficeZoeHistoryMessage[]
+  ): Promise<string> {
     const context: OfficeZoeContext = {
       room: {
         id: currentRoom?.id ?? "lobby",
@@ -1976,7 +1980,7 @@ export default function OfficeDemo({
       })),
     };
 
-    return source.askZoe(question, context);
+    return source.askZoe(question, context, history);
   }
 
   function dismissOnboarding() {

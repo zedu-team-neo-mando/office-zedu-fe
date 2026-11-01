@@ -124,11 +124,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const { question, context } = parsed.data;
+  const { question, history, context } = parsed.data;
 
   // 4. Build clean payload for helper (no pass-through)
   const helperPayload = {
-    messages: [{ role: "user", content: question }],
+    messages: [...(history ?? []), { role: "user", content: question }],
     context: {
       location: "office",
       buildingId: claims.orgId,

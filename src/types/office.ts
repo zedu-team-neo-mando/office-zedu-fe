@@ -170,6 +170,12 @@ export interface OfficeZoeContext {
   nearbyUsers: Array<{ displayName: string; status: OfficePresenceStatus }>;
 }
 
+/** One completed turn of the conversation shown in the Zoe dialog. */
+export interface OfficeZoeHistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 /**
  * Everything the office scene needs from the outside world. The demo
  * implementation reads seeded data and localStorage, the live implementation
@@ -193,7 +199,11 @@ export interface OfficeSource {
   resetLayout(roomId: string): Promise<OfficeFurnitureItem[]>;
   saveAvatar(avatar: OfficeAvatarConfig): Promise<void>;
   sendMessage(roomId: string, text: string): Promise<OfficeChatMessage[]>;
-  askZoe(question: string, context: OfficeZoeContext): Promise<string>;
+  askZoe(
+    question: string,
+    context: OfficeZoeContext,
+    history?: OfficeZoeHistoryMessage[]
+  ): Promise<string>;
   enterRoom(roomId: string): Promise<void>;
   leaveRoom(roomId: string): Promise<void>;
   /**
