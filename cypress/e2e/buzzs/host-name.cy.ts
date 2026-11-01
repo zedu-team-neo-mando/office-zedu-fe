@@ -75,3 +75,67 @@ describe("buzz host names", () => {
       });
     });
     cy.intercept("GET", "**/users/mentions/*", (req) => {
+      if (req.url.endsWith("/host-fetched")) {
+        req.reply({
+          status: "success",
+          data: {
+            userid: "host-fetched",
+            username: "chidi.fetched",
+            fullname: "Chidi Fetched",
+            display_name: "",
+            avatar_url: "",
+            default_avatar_url: "",
+          },
+        });
+        return;
+      }
+      req.reply(404, { status: "error", message: "user not found" });
+    }).as("mention");
+    cy.intercept("GET", "**/buzz/org/all*", {
+      status: "success",
+      data: {
+        buzzes: BUZZES,
+        pagination: {
+          current_page: 1,
+          page_count: 1,
+          total_pages_count: 1,
+          total_items: BUZZES.length,
+        },
+      },
+    });
+
+    cy.visit(`/${SLUG}/buzzs`, {
+      onBeforeLoad: ({ localStorage }) => {
+        localStorage.setItem("token", "test-token");
+        localStorage.setItem("orgId", ORG);
+        localStorage.setItem("orgSlug", SLUG);
+        localStorage.setItem("buzzs-hero-dismissed", "true");
+      },
+    });
+    cy.contains("CODE-GONE").should("exist");
+  });
+
+  it("shows hosts from the first page and from the full member list", () => {
+    titleOf("CODE-FIRST").should("contain", "Ada First");
+    titleOf("CODE-LISTED").should("contain", "Bola Listed");
+  });
+
+  it("fetches a host missing from both lists once, for all of their buzzes", () => {
+    titleOf("CODE-FETCHED-1").should("contain", "Chidi Fetched");
+    titleOf("CODE-FETCHED-2").should("contain", "Chidi Fetched");
+    cy.get("@mention.all").then((calls) => {
+      const urls = (calls as unknown as { request: { url: string } }[]).map(
+        (call) => call.request.url
+      );
+      // One request for the host's two buzzes. Listed hosts may also be
+      // fetched if their row renders before the member lists arrive.
+      expect(
+        urls.filter((url) => url.endsWith("/host-fetched"))
+      ).to.have.length(1);
+    });
+  });
+
+  it('still shows "Someone" when the host no longer exists', () => {
+    titleOf("CODE-GONE").should("contain", "Someone");
+  });
+});
