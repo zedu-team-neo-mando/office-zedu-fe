@@ -601,6 +601,8 @@ export default function OfficeDemo({
           onRoomChange: (room) => handlersRef.current?.onRoomChange(room),
           onPosition: (x, z, yaw) => handlersRef.current?.onPosition(x, z, yaw),
           onZoeProximity: (near) => handlersRef.current?.onZoeProximity(near),
+          onDoorProximity: (door) =>
+            handlersRef.current?.onDoorProximity?.(door),
           onFurnitureSelect: (id) => handlersRef.current?.onFurnitureSelect(id),
           onRequestPlace: (x, z) => handlersRef.current?.onRequestPlace(x, z),
           onRequestMove: (id, x, z) =>
