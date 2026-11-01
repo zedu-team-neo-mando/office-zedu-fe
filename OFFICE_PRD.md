@@ -474,7 +474,7 @@ Register `Office(r, ApiVersion, validator, db, logger)` in `pkg/router/router.go
 | Item            | Spec                                                                                                            |
 | --------------- | --------------------------------------------------------------------------------------------------------------- |
 | Renderer        | `WebGLRenderer({ antialias: true, powerPreference: "high-performance" })`; shadows on desktop, off on low tier. |
-| Camera          | Third-person follow, FOV 60, smooth lerp; no orbit controls in v1.                                              |
+| Camera          | Third-person follow by default; drag to orbit. Optional desktop first person with mouse-look (V/HUD eye).       |
 | Input           | WASD/arrows relative to camera; click/tap floor to pathfind; Shift to run.                                      |
 | Movement        | Acceleration/deceleration; max walk 3 m/s, run 5 m/s; rotation via quaternion slerp.                            |
 | Collision       | Grid AABB against walls, closed doors, and furniture footprints; sliding along walls.                           |
