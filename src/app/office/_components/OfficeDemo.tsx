@@ -1058,7 +1058,11 @@ export default function OfficeDemo({
     if (source.mode !== "live" || phase !== "office" || !limitedRooms.length)
       return;
     let cancelled = false;
+    // A slow read must not land on top of a newer one, so only the latest
+    // read is applied.
+    let latest = 0;
     const read = () => {
+      const sequence = ++latest;
       void Promise.allSettled(
         limitedRooms.map((room) =>
           source
@@ -1066,7 +1070,7 @@ export default function OfficeDemo({
             .then((occupants) => [room.id, occupants.length] as const)
         )
       ).then((results) => {
-        if (cancelled) return;
+        if (cancelled || sequence !== latest) return;
         setRoomCounts((previous) => {
           const next = { ...previous };
           for (const result of results) {
@@ -1085,6 +1089,13 @@ export default function OfficeDemo({
       window.clearInterval(timer);
     };
   }, [source, phase, limitedRooms, availabilityTick]);
+
+  // The last read of a pod the player was standing in counted the player too,
+  // so it is read again as soon as they move to another room; otherwise the
+  // pod they just left would show as full until the next poll.
+  useEffect(() => {
+    if (source.mode === "live") refreshAvailability();
+  }, [source.mode, roomId, refreshAvailability]);
 
   // The room the player stands in is judged by the server's answer to their
   // own entry, never by a headcount that may be a few seconds old.
@@ -1105,13 +1116,11 @@ export default function OfficeDemo({
       const room = roomById[rejectedId];
       const name = room?.name ?? "That room";
       const full = isRoomFullError(error);
-      // A refusal the server actually gave (4xx) means "not you, not now"; a
-      // dropped request is retried on the next reconnect instead.
+      // Any answer the server actually gave (4xx or 5xx) means the player was
+      // not admitted. A request with no answer at all never gets here: the
+      // presence hook retries it instead.
       const refused =
-        error instanceof OfficeEntryError &&
-        typeof error.status === "number" &&
-        error.status >= 400 &&
-        error.status < 500;
+        error instanceof OfficeEntryError && typeof error.status === "number";
 
       if (full) {
         setRoomCounts((previous) => ({
