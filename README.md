@@ -20,34 +20,73 @@ The platform supports:
 
 - Intelligent search and workspace discovery
 
-This repository contains the frontend implementation for the Zedu application.
+This repository contains the frontend implementation for the Zedu application, including the 3D Virtual Office experience (`/office` and `/[org]/office`).
 
 ## Getting Started
 
-To run this app locally, you should have the following programs installed on your computer:
+To run this app locally, ensure you have the following installed:
 
-- [nodejs](https://nodejs.org/)>=20.0.0
-- [pnpm](https://yarnpkg.com/)>=9.4.0
+- [Node.js](https://nodejs.org/) >= 20.0.0
+- [pnpm](https://pnpm.io/) (`pnpm@10.27.0`, as configured in `package.json`)
 
-#### Clone this repository
+#### 1. Clone this repository
 
+```bash
+git clone https://github.com/zedu-team-neo-mando/office-zedu-fe.git
+cd office-zedu-fe
 ```
-git clone git@github.com/hngprojects/Zedu_fe.git
-cd Zedu_fe
-```
 
-#### Install dependencies
+#### 2. Install dependencies
 
-```
+```bash
 pnpm install
 ```
 
-#### Start the server
+#### 3. Configure environment variables
 
+Copy [`env.example`](./env.example) (named without a leading dot because the repository blocks `.env.*` files) to `.env` and fill in your local values:
+
+```bash
+cp env.example .env
 ```
+
+Key variables from `env.example` for local development:
+
+- `NEXT_PUBLIC_BASE_URL` — Zedu REST API base URL (e.g. `https://api.staging.zedu.chat/api/v1`)
+- `NEXT_PUBLIC_CLIENT_URL` — Local frontend URL (`http://localhost:3000`)
+- `NEXT_PUBLIC_MEDIA_URL` — Public media host (`https://media.zedu.chat`)
+- `NEXT_PUBLIC_CONNECT_URL` — Centrifugo WebSocket endpoint (`wss://<host>/connection/websocket`)
+- `CONTRIBUTOR_HELPER_URL` & `ZOE_SERVICE_TOKEN` — Server-only variables used by `/api/office/zoe` for Zoe in the virtual office
+
+Never commit `.env` or real credentials.
+
+#### 4. Start the development server
+
+```bash
 pnpm dev
 ```
 
+Open `http://localhost:3000` in your browser:
+
+- `/office` — Standalone 3D Virtual Office demo (runs client-side without backend API calls)
+- `/<org>/office` — Live organisation 3D Virtual Office (requires an authenticated Zedu session and configured API/Centrifugo endpoints)
+
+#### 5. Quality checks
+
+Before opening a pull request against `dev`, run the verification scripts defined in `package.json`:
+
+```bash
+pnpm check-format
+pnpm check-lint
+pnpm check-types
+pnpm build
+```
+
+## Office Documentation
+
+- [Office Product Requirements (`OFFICE_PRD.md`)](./OFFICE_PRD.md)
+- [Office Deployment Guide (`OFFICE_DEPLOYMENT.md`)](./OFFICE_DEPLOYMENT.md)
+
 ## Contributing
 
-Please see [CONTRIBUTING](./CONTRIBUTING.md)
+Pull requests target the `dev` branch. Please see [CONTRIBUTING](./CONTRIBUTING.md) for branch, commit, and review guidelines.
