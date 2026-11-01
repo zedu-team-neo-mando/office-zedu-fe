@@ -228,6 +228,9 @@ interface DoorRig {
   /** Where a player stands to use it: the middle of the doorway. */
   x: number;
   z: number;
+  /** Which way the wall runs, and half the doorway's width. */
+  alongX: boolean;
+  halfWidth: number;
   closedYaw: number;
   openYaw: number;
 }
@@ -1215,6 +1218,18 @@ export class OfficeEngine {
     this.lastRoomCheck = 0;
   }
 
+  /** Whether the signed-in person owns this office. */
+  private ownsRoom(roomId: string) {
+    const room = this.allRooms.find((item) => item.id === roomId);
+    if (!room || room.kind !== "personal") return false;
+    return (
+      room.ownerId === this.selfId ||
+      room.id === `personal:${this.selfId}` ||
+      // The demo's own office belongs to its seeded "you".
+      (!this.isLive && room.ownerId === "you")
+    );
+  }
+
   isDoorOpen(roomId: string) {
     return this.doorOpen.get(roomId) !== false;
   }
@@ -1275,7 +1290,16 @@ export class OfficeEngine {
       pivot.name = `door:${room.id}`;
       this.buildingGroup.add(pivot);
 
-      this.doorRigs.push({ roomId: room.id, pivot, x, z, closedYaw, openYaw });
+      this.doorRigs.push({
+        roomId: room.id,
+        pivot,
+        x,
+        z,
+        alongX,
+        halfWidth: width / 2,
+        closedYaw,
+        openYaw,
+      });
     }
   }
 
@@ -2710,23 +2734,23 @@ export class OfficeEngine {
       }
     }
 
-    // A shut office door keeps people out the same way, but never traps
-    // anyone: whoever is already inside the office can still walk out.
-    // The zone reaches a body's width past the walls, so nobody can step
-    // onto the threshold and be counted as inside.
-    const shutOut = (bounds: OfficeRoom["bounds"], px: number, pz: number) =>
-      px > bounds.x - radius &&
-      px < bounds.x + bounds.w + radius &&
-      pz > bounds.z - radius &&
-      pz < bounds.z + bounds.d + radius;
-    for (const room of this.allRooms) {
-      if (this.doorOpen.get(room.id) !== false) continue;
-      if ((room.floorIndex ?? 0) !== this.activeFloor) continue;
-      if (this.currentRoom?.id === room.id) continue;
-      // Someone on the way out is still inside the zone for a step or two.
-      if (shutOut(room.bounds, this.playerPosition.x, this.playerPosition.z))
+    // A shut office door is a solid leaf across the doorway, in both
+    // directions: the owner opens it from either side. The one exception is
+    // a visitor who is already inside, who can always walk out, so a door
+    // shut behind a guest never traps them.
+    for (const door of this.doorRigs) {
+      if (this.isDoorOpen(door.roomId)) continue;
+      if (this.currentRoom?.id === door.roomId && !this.ownsRoom(door.roomId))
         continue;
-      if (shutOut(room.bounds, x, z)) return true;
+      const across = 0.08 + radius;
+      const along = door.halfWidth + 0.05;
+      const inDoorway = (px: number, pz: number) =>
+        door.alongX
+          ? Math.abs(px - door.x) < along && Math.abs(pz - door.z) < across
+          : Math.abs(pz - door.z) < along && Math.abs(px - door.x) < across;
+      // Someone standing in the doorway when it shuts can step out of it.
+      if (inDoorway(this.playerPosition.x, this.playerPosition.z)) continue;
+      if (inDoorway(x, z)) return true;
     }
 
     const inside = this.walkBounds.some(
