@@ -60,6 +60,8 @@ export function RoomDirectory({
   currentRoomId,
   presence,
   playerRoomId,
+  roomCounts,
+  fullRoomIds,
   onClose,
   onNavigate,
 }: {
@@ -68,6 +70,10 @@ export function RoomDirectory({
   currentRoomId: string | null;
   presence: PresencePoint[];
   playerRoomId: string | null;
+  /** Server headcounts for rooms the player is not in (Focus pods). */
+  roomCounts?: Record<string, number>;
+  /** Rooms known to be at capacity. */
+  fullRoomIds?: ReadonlySet<string>;
   onClose: () => void;
   onNavigate: (roomId: string) => void;
 }) {
@@ -85,13 +91,18 @@ export function RoomDirectory({
 
   const occupancy = useMemo(() => {
     const map: Record<string, number> = {};
+    // Presence only covers the room the player stands in, so other rooms use
+    // the headcount the server last reported for them.
+    for (const [id, count] of Object.entries(roomCounts ?? {})) {
+      if (id !== playerRoomId && count > 0) map[id] = count;
+    }
     for (const agent of presence) {
       if (agent.roomId === "lobby") continue;
       map[agent.roomId] = (map[agent.roomId] ?? 0) + 1;
     }
     if (playerRoomId) map[playerRoomId] = (map[playerRoomId] ?? 0) + 1;
     return map;
-  }, [presence, playerRoomId]);
+  }, [presence, playerRoomId, roomCounts]);
 
   return (
     <div
@@ -170,6 +181,10 @@ export function RoomDirectory({
                     room={room}
                     active={room.id === currentRoomId}
                     people={occupancy[room.id] ?? 0}
+                    full={
+                      room.id !== currentRoomId &&
+                      Boolean(fullRoomIds?.has(room.id))
+                    }
                     onNavigate={() => onNavigate(room.id)}
                   />
                 ))}
@@ -203,6 +218,10 @@ export function RoomDirectory({
                         room={room}
                         active={room.id === currentRoomId}
                         people={occupancy[room.id] ?? 0}
+                        full={
+                          room.id !== currentRoomId &&
+                          Boolean(fullRoomIds?.has(room.id))
+                        }
                         onNavigate={() => onNavigate(room.id)}
                       />
                     );
@@ -228,11 +247,13 @@ function RoomRow({
   room,
   active,
   people,
+  full = false,
   onNavigate,
 }: {
   room: OfficeRoom;
   active: boolean;
   people: number;
+  full?: boolean;
   onNavigate: () => void;
 }) {
   return (
@@ -268,6 +289,11 @@ function RoomRow({
               locked
             </span>
           )}
+          {full && (
+            <span className="rounded-full bg-[#f43f5e]/15 px-1.5 py-0.5 text-[0.52rem] font-extrabold uppercase tracking-wider text-[#fb7185]">
+              full
+            </span>
+          )}
           {active && (
             <span className="rounded-full bg-[#a78bfa]/15 px-1.5 py-0.5 text-[0.52rem] font-extrabold uppercase tracking-wider text-[#c4b5fd]">
               you
@@ -275,11 +301,13 @@ function RoomRow({
           )}
         </span>
         <span className="mt-0.5 block truncate text-[0.62rem] font-medium text-[#77809a]">
-          {room.locked
-            ? room.kind === "personal"
-              ? "A colleague's office · you can walk up to the door"
-              : "Join the channel in Zedu to enter"
-            : room.description}
+          {full
+            ? "Occupied · try again once it frees up"
+            : room.locked
+              ? room.kind === "personal"
+                ? "A colleague's office · you can walk up to the door"
+                : "Join the channel in Zedu to enter"
+              : room.description}
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-1 text-[0.6rem] font-bold text-[#8f98b2]">

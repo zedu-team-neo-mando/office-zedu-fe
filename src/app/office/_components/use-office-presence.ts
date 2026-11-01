@@ -26,6 +26,12 @@ interface UseOfficePresenceOptions {
   onOccupants: (occupants: OfficeOccupant[]) => void;
   /** Whether the room's realtime roster is connected yet. */
   onState?: (state: OfficePresenceState) => void;
+  /**
+   * The server refused entry to the room the player is standing in, for
+   * example because a Focus pod is already full. Nothing about the player is
+   * published to that room; the caller decides where to put them instead.
+   */
+  onEntryRejected?: (roomId: string, error: unknown) => void;
 }
 
 /**
@@ -45,6 +51,7 @@ export function useOfficePresence({
   pose,
   onOccupants,
   onState,
+  onEntryRejected,
 }: UseOfficePresenceOptions) {
   /** The room whose subscription is live right now, if any. */
   const [liveRoom, setLiveRoom] = useState<string | null>(null);
@@ -58,6 +65,8 @@ export function useOfficePresence({
   onOccupantsRef.current = onOccupants;
   const onStateRef = useRef(onState);
   onStateRef.current = onState;
+  const onEntryRejectedRef = useRef(onEntryRejected);
+  onEntryRejectedRef.current = onEntryRejected;
   const poseRef = useRef(pose);
   poseRef.current = pose;
 
@@ -104,8 +113,9 @@ export function useOfficePresence({
 
   // The room is entered only once its own subscription is live, so entry is
   // sequenced with the stream that reports who is inside it, and it is
-  // attempted at most once per live stretch. The request helper reports a
-  // failure on its own; it is not toasted again here.
+  // attempted at most once per live stretch. A refusal is not an entry: the
+  // room is not marked as entered, so nothing is published as an occupant,
+  // and the caller is told so it can move the player back out.
   useEffect(() => {
     if (!active || !roomId || liveRoom !== roomId) return;
     if (enteredRoomRef.current === roomId || enterAttemptRef.current === roomId)
@@ -128,8 +138,10 @@ export function useOfficePresence({
           // The request helper already reported the failure.
         });
       })
-      .catch(() => {
-        if (!cancelled) enterAttemptRef.current = null;
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        enterAttemptRef.current = null;
+        onEntryRejectedRef.current?.(roomId, error);
       });
 
     return () => {

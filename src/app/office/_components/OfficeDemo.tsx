@@ -32,6 +32,7 @@ import {
 } from "./office-data";
 import { demoSource, demoTowerOffices } from "./demo-office-source";
 import { useOfficePresence } from "./use-office-presence";
+import { OfficeEntryError, isRoomFullError } from "./office-entry";
 import type {
   OfficeOccupant,
   OfficeSource,
@@ -53,6 +54,9 @@ const initialPresence: PresencePoint[] = DEMO_USERS.filter(
   status: user.status,
   tint: user.avatar.tint,
 }));
+
+/** How often the Focus pods on the floor are re-read for a free seat. */
+const AVAILABILITY_POLL_MS = 15_000;
 
 const TOUR_STEPS: TourStep[] = [
   {
@@ -1028,6 +1032,112 @@ export default function OfficeDemo({
     engineRef.current?.setDoors(doorStates);
   }, [doorStates, ready]);
 
+  // Single-occupancy rooms (the Focus pods) are the ones a visitor can be
+  // turned away from, so their headcount is read from the server before
+  // anyone walks up to them. Presence only streams the room the player is in,
+  // which is why the other pods on the floor are polled instead.
+  const limitedRooms = useMemo(
+    () =>
+      rooms.filter(
+        (room) =>
+          room.kind === "focus" &&
+          !room.locked &&
+          room.capacity > 0 &&
+          (room.floorIndex ?? 0) === activeFloor
+      ),
+    [rooms, activeFloor]
+  );
+  const [roomCounts, setRoomCounts] = useState<Record<string, number>>({});
+  const [availabilityTick, setAvailabilityTick] = useState(0);
+  const refreshAvailability = useCallback(
+    () => setAvailabilityTick((value) => value + 1),
+    []
+  );
+
+  useEffect(() => {
+    if (source.mode !== "live" || phase !== "office" || !limitedRooms.length)
+      return;
+    let cancelled = false;
+    const read = () => {
+      void Promise.allSettled(
+        limitedRooms.map((room) =>
+          source
+            .fetchOccupants(room.id)
+            .then((occupants) => [room.id, occupants.length] as const)
+        )
+      ).then((results) => {
+        if (cancelled) return;
+        setRoomCounts((previous) => {
+          const next = { ...previous };
+          for (const result of results) {
+            if (result.status === "fulfilled") {
+              next[result.value[0]] = result.value[1];
+            }
+          }
+          return next;
+        });
+      });
+    };
+    read();
+    const timer = window.setInterval(read, AVAILABILITY_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [source, phase, limitedRooms, availabilityTick]);
+
+  // The room the player stands in is judged by the server's answer to their
+  // own entry, never by a headcount that may be a few seconds old.
+  const fullRoomIds = useMemo(() => {
+    const full = new Set<string>();
+    for (const room of limitedRooms) {
+      if (room.id === roomId) continue;
+      if ((roomCounts[room.id] ?? 0) >= room.capacity) full.add(room.id);
+    }
+    return full;
+  }, [limitedRooms, roomCounts, roomId]);
+
+  // The server said no. The player is put back in the corridor, the room is
+  // marked full if that was the reason, and the headcounts are read again so
+  // the map catches up with the server's decision straight away.
+  const handleEntryRejected = useCallback(
+    (rejectedId: string, error: unknown) => {
+      const room = roomById[rejectedId];
+      const name = room?.name ?? "That room";
+      const full = isRoomFullError(error);
+      // A refusal the server actually gave (4xx) means "not you, not now"; a
+      // dropped request is retried on the next reconnect instead.
+      const refused =
+        error instanceof OfficeEntryError &&
+        typeof error.status === "number" &&
+        error.status >= 400 &&
+        error.status < 500;
+
+      if (full) {
+        setRoomCounts((previous) => ({
+          ...previous,
+          [rejectedId]: Math.max(
+            previous[rejectedId] ?? 0,
+            room?.capacity ?? 1
+          ),
+        }));
+        showError(
+          `${name} is full`,
+          "Someone is already in there. Try again once it frees up."
+        );
+      } else {
+        showError(
+          `Couldn't enter ${name}`,
+          error instanceof Error ? error.message : "Please try again."
+        );
+      }
+
+      if (full || refused) engineRef.current?.stepOutOfRoom(rejectedId);
+      refreshAvailability();
+    },
+    [roomById, refreshAvailability]
+  );
+
   // Presence, room entry and movement publishing all follow the room the user
   // is in, and all of them are sequenced in one place.
   useOfficePresence({
@@ -1037,6 +1147,7 @@ export default function OfficeDemo({
     pose: player,
     onOccupants: mergePresence,
     onState: setPresenceState,
+    onEntryRejected: handleEntryRejected,
   });
 
   // A room being read is a room whose conversation matters: the one you are
@@ -1976,6 +2087,16 @@ export default function OfficeDemo({
       );
       return;
     }
+    if (fullRoomIds.has(id)) {
+      // The headcount may be a few seconds old, so it is read again: a pod
+      // that has just freed up is open on the next click.
+      refreshAvailability();
+      showInfo(
+        `${room.name} is occupied`,
+        "It's single occupancy and someone is in there. Try another pod."
+      );
+      return;
+    }
     const engine = engineRef.current;
     if (!engine) return;
     closeEditor();
@@ -2117,6 +2238,7 @@ export default function OfficeDemo({
             editorOpen={editorActive}
             isMobile={isMobile}
             mapOpen={mapOpen}
+            fullRoomIds={fullRoomIds}
             onToggleMap={() => setMapOpen((value) => !value)}
             onOpenDirectory={openDirectory}
             onOpenAvatar={openAvatar}
@@ -2135,6 +2257,8 @@ export default function OfficeDemo({
             currentRoomId={roomId}
             presence={presence}
             playerRoomId={roomId}
+            roomCounts={roomCounts}
+            fullRoomIds={fullRoomIds}
             onClose={() => setDirectoryOpen(false)}
             onNavigate={navigateToRoom}
           />
