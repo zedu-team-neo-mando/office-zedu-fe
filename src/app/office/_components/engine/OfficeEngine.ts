@@ -2,6 +2,7 @@ import * as THREE from "three";
 import {
   BUILDING,
   CATALOG_BY_ID,
+  DEMO_USER_ID,
   DEMO_USERS,
   FURNITURE_CATALOG,
   ROOM_BY_ID,
@@ -2246,6 +2247,16 @@ export class OfficeEngine {
     }
   }
 
+  /** The demo seeds the local player as DEMO_USER_ID, so their tab id differs. */
+  private ownsRoom(room: { id: string; ownerId?: string }) {
+    return (
+      room.ownerId === this.selfId ||
+      room.ownerId === DEMO_USER_ID ||
+      room.id === `personal:${this.selfId}` ||
+      room.id === `personal:${DEMO_USER_ID}`
+    );
+  }
+
   private updateRoomDoorProximity() {
     let best: { roomId: string; canOperate: boolean; open: boolean } | null =
       null;
@@ -2261,8 +2272,7 @@ export class OfficeEngine {
       bestDistance = distance;
       best = {
         roomId: rig.roomId,
-        canOperate:
-          room.ownerId === this.selfId || room.id === `personal:${this.selfId}`,
+        canOperate: this.ownsRoom(room),
         open: rig.open,
       };
     }
