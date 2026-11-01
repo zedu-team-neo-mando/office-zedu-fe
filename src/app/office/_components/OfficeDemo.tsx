@@ -859,9 +859,24 @@ export default function OfficeDemo({
   // Chat, the furniture editor and the tower all cover or replace the floor,
   // so first person cannot stay on behind them.
   useEffect(() => {
-    if (chatOpen || editorActive || towerOpen) exitFirstPerson();
+    if (
+      chatOpen ||
+      editorActive ||
+      towerOpen ||
+      zoeOpen ||
+      directoryOpen ||
+      onboardingOpen
+    )
+      exitFirstPerson();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatOpen, editorActive, towerOpen]);
+  }, [
+    chatOpen,
+    editorActive,
+    towerOpen,
+    zoeOpen,
+    directoryOpen,
+    onboardingOpen,
+  ]);
 
   useEffect(() => {
     const timers = timersRef.current;
@@ -1299,7 +1314,15 @@ export default function OfficeDemo({
   function toggleFirstPerson() {
     const state = stateRef.current;
     // A panel needs the pointer; capturing it behind one traps the cursor.
-    if (state.chatOpen || state.editorActive || state.towerOpen) return;
+    if (
+      state.chatOpen ||
+      state.editorActive ||
+      state.towerOpen ||
+      state.zoeOpen ||
+      state.directoryOpen ||
+      state.onboardingOpen
+    )
+      return;
     setFirstPersonView(!state.firstPerson);
   }
 
