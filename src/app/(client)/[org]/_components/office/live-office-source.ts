@@ -399,6 +399,10 @@ export class LiveOfficeSource implements OfficeSource {
   /** The room presence subscription that is open right now, if any. */
   private presenceSubscription: any = null;
   private presenceRoomId: string | null = null;
+  /** Live door channels, by floor, so the owner's change reaches each one. */
+  private doorSubscriptions = new Map<number, any>();
+  /** Everyone listening for doors in this tab, so a change shows at once. */
+  private doorListeners = new Set<(roomId: string, open: boolean) => void>();
   private lastPose: {
     roomId: string;
     x: number;
@@ -923,6 +927,153 @@ export class LiveOfficeSource implements OfficeSource {
       releaseChannelSubscription(client, channel, subscription);
       // The roster dies with the subscription it belongs to, so the next room
       // starts from its own snapshot instead of inheriting this one.
+    };
+  }
+
+  private doorKey(roomId: string) {
+    return `office_door_${this.orgId}_${roomId}`;
+  }
+
+  /** The owner's own door state, remembered in this browser. */
+  private readOwnDoor(roomId: string): boolean | null {
+    try {
+      const stored = localStorage.getItem(this.doorKey(roomId));
+      return stored === "closed" ? false : stored === "open" ? true : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The offices this user owns on a storey. */
+  private ownOfficesOn(floorIndex: number) {
+    return this.rooms.filter(
+      (room) =>
+        (room.floorIndex ?? 0) === floorIndex &&
+        ownsPersonalOffice(room, this.userId)
+    );
+  }
+
+  /**
+   * The storey's shared room (reception, lobby or open area), whose channel
+   * everyone on the floor can hear. Door changes travel on it because people
+   * in the corridor are not subscribed to the office they are looking at.
+   */
+  private floorCommonRoomId(floorIndex: number): string | null {
+    const onFloor = this.rooms.filter(
+      (room) => (room.floorIndex ?? 0) === floorIndex
+    );
+    const common =
+      onFloor.find((room) => room.kind === "reception") ??
+      onFloor.find((room) => room.kind === "lobby") ??
+      onFloor.find((room) => room.kind === "area") ??
+      onFloor[0];
+    return common?.id ?? null;
+  }
+
+  private publishDoor(subscription: any, roomId: string, open: boolean) {
+    if (subscription?.state !== "subscribed") return;
+    subscription
+      .publish({
+        type: "office_door",
+        roomId,
+        open,
+        senderId: this.userId,
+        at: new Date().toISOString(),
+      })
+      .catch(() => {
+        // The next change or query carries the state again.
+      });
+  }
+
+  async setDoor(roomId: string, open: boolean) {
+    const room = this.rooms.find((candidate) => candidate.id === roomId);
+    if (!room || !ownsPersonalOffice(room, this.userId)) {
+      throw new Error("Only the owner can open or close this door.");
+    }
+    try {
+      localStorage.setItem(this.doorKey(roomId), open ? "open" : "closed");
+    } catch {
+      // Private browsing: the door still changes for this visit.
+    }
+    for (const listener of this.doorListeners) listener(roomId, open);
+    this.publishDoor(
+      this.doorSubscriptions.get(room.floorIndex ?? 0),
+      roomId,
+      open
+    );
+  }
+
+  subscribeDoors(
+    floorIndex: number,
+    onDoor: (roomId: string, open: boolean) => void
+  ): () => void {
+    // This user's own doors are known straight away, whatever the network.
+    for (const room of this.ownOfficesOn(floorIndex)) {
+      const open = this.readOwnDoor(room.id);
+      if (open !== null) onDoor(room.id, open);
+    }
+    const local = (roomId: string, open: boolean) => {
+      const room = this.rooms.find((candidate) => candidate.id === roomId);
+      if ((room?.floorIndex ?? 0) === floorIndex) onDoor(roomId, open);
+    };
+    this.doorListeners.add(local);
+
+    const commonRoomId = this.floorCommonRoomId(floorIndex);
+    if (!commonRoomId) {
+      return () => {
+        this.doorListeners.delete(local);
+      };
+    }
+
+    const client = getSharedCentrifuge();
+    const channel = presenceChannel(this.orgId, floorIndex, commonRoomId);
+    const subscription = prepareChannelSubscription(client, channel, {
+      getToken: () => getSubscriptionToken(channel),
+    });
+    this.doorSubscriptions.set(floorIndex, subscription);
+
+    const announceOwn = () => {
+      for (const room of this.ownOfficesOn(floorIndex)) {
+        const open = this.readOwnDoor(room.id);
+        if (open !== null) this.publishDoor(subscription, room.id, open);
+      }
+    };
+
+    const onPublication = (ctx: any) => {
+      const data = ctx?.data;
+      if (data?.type === "office_door_query") {
+        if (data.senderId !== this.userId) announceOwn();
+        return;
+      }
+      if (data?.type !== "office_door" || typeof data.roomId !== "string")
+        return;
+      // Only the owner's word counts. Centrifugo names the publisher when it
+      // can; otherwise the sender id inside the message is all there is.
+      const sender = String(ctx?.info?.user ?? data.senderId ?? "");
+      const room = this.rooms.find((candidate) => candidate.id === data.roomId);
+      if (!room || !sender || !ownsPersonalOffice(room, sender)) return;
+      onDoor(room.id, Boolean(data.open));
+    };
+    const onSubscribed = () => {
+      announceOwn();
+      subscription
+        .publish({ type: "office_door_query", senderId: this.userId })
+        .catch(() => {});
+    };
+
+    subscription.on("publication", onPublication);
+    subscription.on("subscribed", onSubscribed);
+    if (subscription.state === "subscribed") onSubscribed();
+    subscription.subscribe();
+
+    return () => {
+      this.doorListeners.delete(local);
+      if (this.doorSubscriptions.get(floorIndex) === subscription) {
+        this.doorSubscriptions.delete(floorIndex);
+      }
+      subscription.off("publication", onPublication);
+      subscription.off("subscribed", onSubscribed);
+      releaseChannelSubscription(client, channel, subscription);
     };
   }
 

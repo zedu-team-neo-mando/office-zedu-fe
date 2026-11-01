@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import {
   ArrowUp,
+  DoorClosed,
   Building2,
   ChevronDown,
   ChevronUp,
@@ -44,6 +45,9 @@ interface HudProps {
   selfName: string;
   selfRole: string;
   nearZoe: boolean;
+  /** The personal-office door the player is standing at, if any. */
+  door?: { name: string; open: boolean; own: boolean } | null;
+  onToggleDoor?: () => void;
   unread: number;
   chatOpen: boolean;
   editorOpen: boolean;
@@ -81,6 +85,8 @@ export default function Hud({
   selfName,
   selfRole,
   nearZoe,
+  door,
+  onToggleDoor,
   unread,
   chatOpen,
   editorOpen,
@@ -290,6 +296,40 @@ export default function Hud({
               </span>
               Talk
             </button>
+          </div>
+        ) : door && (door.own || !door.open) ? (
+          <div className="office-glass pointer-events-auto mx-auto flex w-fit items-center gap-3 rounded-2xl px-4 py-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/8 text-[#c4b5fd]">
+              {door.open ? (
+                <DoorOpen className="h-4.5 w-4.5" />
+              ) : (
+                <DoorClosed className="h-4.5 w-4.5" />
+              )}
+            </span>
+            <div>
+              <p className="text-[0.72rem] font-extrabold uppercase tracking-[0.16em] text-[#c4b5fd]">
+                {door.own ? "Your door" : door.name}
+              </p>
+              <p className="text-[0.78rem] font-semibold text-[#d8dced]">
+                {door.own
+                  ? door.open
+                    ? "Open · visitors can walk in"
+                    : "Shut · visitors stay outside"
+                  : "Door shut · say hello in the conversation"}
+              </p>
+            </div>
+            {door.own && (
+              <button
+                type="button"
+                className="office-button-primary !h-10 !rounded-xl !px-3.5 !text-[0.78rem]"
+                onClick={onToggleDoor}
+              >
+                <span className="office-kbd !border-white/20 !bg-white/10">
+                  E
+                </span>
+                {door.open ? "Close door" : "Open door"}
+              </button>
+            )}
           </div>
         ) : editorOpen ? (
           <div className="office-glass mx-auto flex w-fit items-center gap-3 rounded-2xl px-4 py-2 text-[0.72rem] font-semibold text-[#b9c1d6]">
