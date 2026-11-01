@@ -92,7 +92,7 @@
     "agora-token": "^2.0.5",
     "ai": "^5.0.62",
     "aos": "^2.3.4",
-    "axios": "^1.7.3",
+    "axios": "1.14.0",
     "browser-image-compression": "2.0.2",
     "cent.js": "^6.1.0",
     "centrifuge": "^5.2.2",
@@ -220,7 +220,10 @@
       "react-email>next": "$next",
       "lodash@<4.17.12": "4.17.21",
       "underscore@<1.12.1": "1.13.8",
-      "handlebars@<4.7.10": "4.7.10"
+      "handlebars@<4.7.10": "4.7.10",
+      "axios": "1.14.0",
+      "undici": "5.28.5",
+      "fast-uri": "3.0.0"
     }
   },
   "overrides": {
@@ -229,6 +232,9 @@
     "react-email>next": "$next",
     "lodash@<4.17.12": "4.17.21",
     "underscore@<1.12.1": "1.13.8",
-    "handlebars@<4.7.10": "4.7.10"
+    "handlebars@<4.7.10": "4.7.10",
+    "axios": "1.14.0",
+    "undici": "5.28.5",
+    "fast-uri": "3.0.0"
   }
 }
