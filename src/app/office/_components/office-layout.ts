@@ -1,5 +1,6 @@
 import {
   CATALOG_BY_ID,
+  furnitureAabb,
   type FurnitureItem,
   type OfficeRoom,
   validatePlacement,
@@ -234,6 +235,15 @@ function visitorSeats(
       item.rotation,
       room
     );
+  // Not overlapping is not enough: the guests must not wall the owner off
+  // from their own chair, and every guest chair has to be reachable too.
+  const owner = placed.find((item) => item.id === `${room.id}-chair`);
+  const walkable = (guests: FurnitureItem[]) =>
+    canReachSeats(
+      room,
+      [...placed, ...guests],
+      owner ? [owner, ...guests] : guests
+    );
 
   // A chair's footprint is 1 by 1 and the desk is 1 deep, so 1.1 from the
   // desk's centre leaves a hand's width between them.
@@ -246,7 +256,11 @@ function visitorSeats(
     for (const row of rows) {
       const left = chairAt(1, -spread, row);
       const right = chairAt(2, spread, row);
-      if (fits(left, placed) && fits(right, [...placed, left])) {
+      if (
+        fits(left, placed) &&
+        fits(right, [...placed, left]) &&
+        walkable([left, right])
+      ) {
         return [left, right];
       }
     }
@@ -255,7 +269,7 @@ function visitorSeats(
   for (const across of [0, ...spreads.flatMap((value) => [-value, value])]) {
     for (const row of rows) {
       const single = chairAt(1, across, row);
-      if (fits(single, placed)) return [single];
+      if (fits(single, placed) && walkable([single])) return [single];
     }
   }
   return [];
@@ -310,5 +324,110 @@ export function roomLayoutItems(
 ): FurnitureItem[] {
   return items.filter((item) =>
     item.roomId ? item.roomId === room.id : roomContains(room, item.x, item.z)
+  );
+}
+
+/** Roughly the walking avatar's radius, with a little room to spare. */
+const WALK_RADIUS = 0.4;
+/** How finely the floor is sampled for the walkability check. */
+const WALK_STEP = 0.1;
+
+/**
+ * Whether someone walking in through the door can reach a spot beside every
+ * one of the given seats, the way the scene walks a player to a chair. Walls
+ * and every solid piece of furniture block the way.
+ */
+function canReachSeats(
+  room: OfficeRoom,
+  items: FurnitureItem[],
+  seats: FurnitureItem[]
+): boolean {
+  const b = room.bounds;
+  const cols = Math.floor(b.w / WALK_STEP) + 1;
+  const rows = Math.floor(b.d / WALK_STEP) + 1;
+  const solids = items
+    .filter((item) => CATALOG_BY_ID[item.catalogId]?.collision)
+    .map(furnitureAabb);
+
+  const free = (x: number, z: number) => {
+    if (
+      x < b.x + WALK_RADIUS ||
+      x > b.x + b.w - WALK_RADIUS ||
+      z < b.z + WALK_RADIUS ||
+      z > b.z + b.d - WALK_RADIUS
+    ) {
+      return false;
+    }
+    return !solids.some(
+      (box) =>
+        x > box.minX - WALK_RADIUS &&
+        x < box.maxX + WALK_RADIUS &&
+        z > box.minZ - WALK_RADIUS &&
+        z < box.maxZ + WALK_RADIUS
+    );
+  };
+  const toCell = (x: number, z: number) => ({
+    cx: Math.round((x - b.x) / WALK_STEP),
+    cz: Math.round((z - b.z) / WALK_STEP),
+  });
+  const inGrid = (cx: number, cz: number) =>
+    cx >= 0 && cz >= 0 && cx < cols && cz < rows;
+  const pointOf = (cx: number, cz: number) => ({
+    x: b.x + cx * WALK_STEP,
+    z: b.z + cz * WALK_STEP,
+  });
+
+  // The walk starts just inside the doorway, from whichever wall it is on.
+  const center = { x: b.x + b.w / 2, z: b.z + b.d / 2 };
+  const length = Math.hypot(center.x - room.door.x, center.z - room.door.z);
+  const inward = length
+    ? {
+        x: (center.x - room.door.x) / length,
+        z: (center.z - room.door.z) / length,
+      }
+    : { x: 0, z: -1 };
+  let start: { cx: number; cz: number } | null = null;
+  for (let step = 0.5; step <= 1.5 && !start; step += 0.1) {
+    const x = room.door.x + inward.x * step;
+    const z = room.door.z + inward.z * step;
+    if (free(x, z)) start = toCell(x, z);
+  }
+  if (!start) return false;
+
+  const seen = new Uint8Array(cols * rows);
+  const queue: Array<[number, number]> = [[start.cx, start.cz]];
+  seen[start.cz * cols + start.cx] = 1;
+  while (queue.length) {
+    const [cx, cz] = queue.pop()!;
+    for (const [dx, dz] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ]) {
+      const nx = cx + dx;
+      const nz = cz + dz;
+      if (!inGrid(nx, nz) || seen[nz * cols + nx]) continue;
+      const point = pointOf(nx, nz);
+      if (!free(point.x, point.z)) continue;
+      seen[nz * cols + nx] = 1;
+      queue.push([nx, nz]);
+    }
+  }
+
+  // A seat counts as reachable when any of the spots the scene would walk
+  // the player to (in front, beside or behind it) was reached.
+  return seats.every((seat) =>
+    [0.85, 1.1, 1.35].some((reach) =>
+      [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ].some(([dx, dz]) => {
+        const { cx, cz } = toCell(seat.x + dx * reach, seat.z + dz * reach);
+        return inGrid(cx, cz) && seen[cz * cols + cx] === 1;
+      })
+    )
   );
 }
