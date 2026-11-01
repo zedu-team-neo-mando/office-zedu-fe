@@ -353,6 +353,38 @@ export default function OfficeDemo({
       ) ?? null,
     [floorRooms]
   );
+  /** The other person's office whose doorway the player is standing at. */
+  const nearOwnerDoor = useMemo(() => {
+    let nearest: {
+      roomId: string;
+      ownerName: string;
+      hasChat: boolean;
+    } | null = null;
+    let nearestDistance = 2.2;
+    for (const room of rooms) {
+      if (
+        room.kind !== "personal" ||
+        !room.ownerId ||
+        room.ownerId === selfId ||
+        !room.door ||
+        (room.floorIndex ?? 0) !== activeFloor
+      )
+        continue;
+      const distance = Math.hypot(
+        player.x - room.door.x,
+        player.z - room.door.z
+      );
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = {
+          roomId: room.id,
+          ownerName: room.name,
+          hasChat: Boolean(room.chat),
+        };
+      }
+    }
+    return nearest;
+  }, [rooms, player, selfId, activeFloor]);
   const [towerHover, setTowerHover] = useState<TowerOffice | null>(null);
   const [liftTarget, setLiftTarget] = useState<number | null>(null);
   /** Office held in frame from the street, with its conversation open. */
@@ -528,6 +560,7 @@ export default function OfficeDemo({
     presence,
     presenceState,
     nearZoe,
+    nearOwnerDoor,
     towerOpen,
     editorActive,
     editorCatalogId,
@@ -555,6 +588,7 @@ export default function OfficeDemo({
     presence,
     presenceState,
     nearZoe,
+    nearOwnerDoor,
     towerOpen,
     editorActive,
     editorCatalogId,
@@ -777,6 +811,10 @@ export default function OfficeDemo({
       const key = event.key.toLowerCase();
       if (key === "e") {
         event.preventDefault();
+        if (state.nearOwnerDoor) {
+          messageOfficeOwner();
+          return;
+        }
         openZoe();
       } else if (key === "b") {
         event.preventDefault();
@@ -1701,6 +1739,22 @@ export default function OfficeDemo({
     });
   }
 
+  /** Open the neighbour's conversation from their doorway, without entering. */
+  function messageOfficeOwner() {
+    const door = stateRef.current.nearOwnerDoor;
+    if (!door) return;
+    if (!door.hasChat) {
+      showInfo(
+        "No conversation linked yet",
+        "Open a DM with them in Zedu, then reload The Office to message them from their door."
+      );
+      return;
+    }
+    setChatTargetId(door.roomId);
+    setChatOpen(true);
+    setUnread(0);
+  }
+
   function openConversation(id: string) {
     const target = existingConversations.find((room) => room.id === id);
     if (!target) return;
@@ -2032,6 +2086,7 @@ export default function OfficeDemo({
               self?.role ?? (source.mode === "demo" ? "Product Designer" : "")
             }
             nearZoe={nearZoe}
+            ownerDoorPrompt={nearOwnerDoor}
             unread={unread}
             chatOpen={chatOpen}
             editorOpen={editorActive}
@@ -2047,6 +2102,7 @@ export default function OfficeDemo({
             onExit={exitDemo}
             onNavigate={navigateToRoom}
             onInteract={openZoe}
+            onMessageOwner={messageOfficeOwner}
           />
 
           <RoomDirectory
