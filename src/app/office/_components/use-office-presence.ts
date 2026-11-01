@@ -32,6 +32,8 @@ interface UseOfficePresenceOptions {
    * published to that room; the caller decides where to put them instead.
    */
   onEntryRejected?: (roomId: string, error: unknown) => void;
+  /** The server let the player into the room they are standing in. */
+  onEntered?: (roomId: string) => void;
 }
 
 /**
@@ -52,6 +54,7 @@ export function useOfficePresence({
   onOccupants,
   onState,
   onEntryRejected,
+  onEntered,
 }: UseOfficePresenceOptions) {
   /** The room whose subscription is live right now, if any. */
   const [liveRoom, setLiveRoom] = useState<string | null>(null);
@@ -67,6 +70,8 @@ export function useOfficePresence({
   onStateRef.current = onState;
   const onEntryRejectedRef = useRef(onEntryRejected);
   onEntryRejectedRef.current = onEntryRejected;
+  const onEnteredRef = useRef(onEntered);
+  onEnteredRef.current = onEntered;
   const poseRef = useRef(pose);
   poseRef.current = pose;
 
@@ -130,6 +135,7 @@ export function useOfficePresence({
         if (!cancelled) {
           enteredRoomRef.current = roomId;
           setEnteredRoom(roomId);
+          onEnteredRef.current?.(roomId);
           return;
         }
         // The player moved on while entry was still in flight, so the server

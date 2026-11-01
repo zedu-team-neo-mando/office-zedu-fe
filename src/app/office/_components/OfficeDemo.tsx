@@ -1148,6 +1148,7 @@ export default function OfficeDemo({
     onOccupants: mergePresence,
     onState: setPresenceState,
     onEntryRejected: handleEntryRejected,
+    onEntered: (enteredId) => handleEntered(enteredId),
   });
 
   // A room being read is a room whose conversation matters: the one you are
@@ -1241,11 +1242,12 @@ export default function OfficeDemo({
       setChatOpen(true);
       setUnread(0);
     }
+  }
 
-    if (
-      room?.kind === "focus" &&
-      roomById[previousId ?? ""]?.kind !== "focus"
-    ) {
+  // Focus mode is only announced once the server has let the player into the
+  // pod, so someone turned away from a full pod is never told it is on.
+  function handleEntered(enteredId: string) {
+    if (roomById[enteredId]?.kind === "focus") {
       showInfo("Focus mode", "Your status is now Do not disturb.");
     }
   }
