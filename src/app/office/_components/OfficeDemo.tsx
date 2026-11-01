@@ -366,6 +366,8 @@ export default function OfficeDemo({
         room.kind !== "personal" ||
         !room.ownerId ||
         room.ownerId === selfId ||
+        // The demo seeds the local player as the owner of `personal:you`.
+        (source.mode === "demo" && room.ownerId === DEMO_USER_ID) ||
         !room.door ||
         (room.floorIndex ?? 0) !== activeFloor
       )
@@ -384,7 +386,7 @@ export default function OfficeDemo({
       }
     }
     return nearest;
-  }, [rooms, player, selfId, activeFloor]);
+  }, [rooms, player, selfId, activeFloor, source.mode]);
   const [towerHover, setTowerHover] = useState<TowerOffice | null>(null);
   const [liftTarget, setLiftTarget] = useState<number | null>(null);
   /** Office held in frame from the street, with its conversation open. */
