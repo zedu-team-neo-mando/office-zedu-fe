@@ -176,7 +176,89 @@ export function personalOfficeTemplate(room: OfficeRoom): FurnitureItem[] {
     if (blocked) continue;
     items.push(item);
   }
+
+  items.push(
+    ...visitorSeats(
+      room,
+      items,
+      (distance, across) => {
+        const point = at(distance);
+        return alongZ
+          ? { x: point.x + across, z: point.z }
+          : { x: point.x, z: point.z + across };
+      },
+      seatOffset + 2.2,
+      oppositeRotation(toDoor)
+    )
+  );
   return items;
+}
+
+/**
+ * Up to two guest chairs on the visitors' side of the desk, turned to face
+ * the owner, so a guest can sit and talk without taking the owner's chair.
+ *
+ * The preferred spot is a pair straight across the desk. A narrow office whose
+ * doorway reaches that far gets the pair spread to either side of the walking
+ * line instead, and an office with room for only one gets one. Each chair goes
+ * through the same placement check as anything the owner places, so a guest
+ * chair never crosses a wall, sits in the doorway or overlaps the desk; when
+ * there is no clear spot the office simply has no guest seating.
+ */
+function visitorSeats(
+  room: OfficeRoom,
+  placed: FurnitureItem[],
+  spot: (distance: number, across: number) => { x: number; z: number },
+  distance: number,
+  rotation: Rotation
+): FurnitureItem[] {
+  if (!CATALOG_BY_ID.chair_ergo) return [];
+
+  const chairAt = (index: number, across: number, row: number) => {
+    const point = spot(row, across);
+    return {
+      id: `${room.id}-visitor-${index}`,
+      roomId: room.id,
+      catalogId: "chair_ergo",
+      x: round(point.x),
+      z: round(point.z),
+      rotation,
+    } satisfies FurnitureItem;
+  };
+  const fits = (item: FurnitureItem, others: FurnitureItem[]) =>
+    !validatePlacement(
+      others,
+      item.catalogId,
+      item.x,
+      item.z,
+      item.rotation,
+      room
+    );
+
+  // A chair's footprint is 1 by 1 and the desk is 1 deep, so 1.1 from the
+  // desk's centre leaves a hand's width between them.
+  const rows = [distance, distance - 0.1];
+  // 0.6 sits the pair side by side across the desk; 1.7 keeps both chairs
+  // clear of the doorway's walking line in a small office.
+  const spreads = [0.6, 1.7];
+
+  for (const spread of spreads) {
+    for (const row of rows) {
+      const left = chairAt(1, -spread, row);
+      const right = chairAt(2, spread, row);
+      if (fits(left, placed) && fits(right, [...placed, left])) {
+        return [left, right];
+      }
+    }
+  }
+
+  for (const across of [0, ...spreads.flatMap((value) => [-value, value])]) {
+    for (const row of rows) {
+      const single = chairAt(1, across, row);
+      if (fits(single, placed)) return [single];
+    }
+  }
+  return [];
 }
 
 /**
