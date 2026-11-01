@@ -399,6 +399,9 @@ export class LiveOfficeSource implements OfficeSource {
   /** The room presence subscription that is open right now, if any. */
   private presenceSubscription: any = null;
   private presenceRoomId: string | null = null;
+  /** Door-event subscriptions and unpublished toggles, keyed by channel. */
+  private doorSubscriptions = new Map<string, any>();
+  private doorOutbox = new Map<string, { roomId: string; open: boolean }>();
   private lastPose: {
     roomId: string;
     x: number;
@@ -924,6 +927,78 @@ export class LiveOfficeSource implements OfficeSource {
       // The roster dies with the subscription it belongs to, so the next room
       // starts from its own snapshot instead of inheriting this one.
     };
+  }
+
+  /**
+   * Announces the owner's door toggle on the office's realtime channel.
+   * Everyone watching that floor listens on the same channel (watchFloor-
+   * Doors), so the leaf shows the same thing on every screen. A toggle made
+   * while the channel is still connecting is held as the office's latest
+   * state and published the moment the subscription goes live.
+   */
+  publishDoorState(roomId: string, open: boolean) {
+    const channel = presenceChannel(
+      this.orgId,
+      this.floorByRoom[roomId] ?? 0,
+      roomId
+    );
+    this.doorOutbox.set(channel, { roomId, open });
+    const subscription = this.doorSubscriptions.get(channel);
+    if (subscription) this.flushDoorState(channel, subscription);
+  }
+
+  watchFloorDoors(
+    roomIds: string[],
+    onToggle: (roomId: string, open: boolean) => void
+  ): () => void {
+    const client = getSharedCentrifuge();
+    const held: Array<{
+      channel: string;
+      subscription: any;
+      onPublication: (ctx: any) => void;
+      onSubscribed: () => void;
+    }> = [];
+    for (const roomId of roomIds) {
+      const channel = presenceChannel(
+        this.orgId,
+        this.floorByRoom[roomId] ?? 0,
+        roomId
+      );
+      const subscription = prepareChannelSubscription(client, channel, {
+        getToken: () => getSubscriptionToken(channel),
+      });
+      const onPublication = (ctx: any) => {
+        const data = ctx?.data;
+        if (data?.type !== "door" || data.roomId !== roomId) return;
+        if (typeof data.open !== "boolean") return;
+        onToggle(roomId, data.open);
+      };
+      const onSubscribed = () => this.flushDoorState(channel, subscription);
+      subscription.on("publication", onPublication);
+      subscription.on("subscribed", onSubscribed);
+      this.doorSubscriptions.set(channel, subscription);
+      if (subscription.state !== "subscribed") subscription.subscribe();
+      held.push({ channel, subscription, onPublication, onSubscribed });
+    }
+    return () => {
+      for (const item of held) {
+        item.subscription.off("publication", item.onPublication);
+        item.subscription.off("subscribed", item.onSubscribed);
+        if (this.doorSubscriptions.get(item.channel) === item.subscription) {
+          this.doorSubscriptions.delete(item.channel);
+        }
+        releaseChannelSubscription(client, item.channel, item.subscription);
+      }
+    };
+  }
+
+  private flushDoorState(channel: string, subscription: any) {
+    const held = this.doorOutbox.get(channel);
+    if (!held || subscription.state !== "subscribed") return;
+    this.doorOutbox.delete(channel);
+    subscription
+      .publish({ type: "door", roomId: held.roomId, open: held.open })
+      .catch(() => {});
   }
 
   async fetchMessages(roomId: string): Promise<OfficeChatMessage[]> {

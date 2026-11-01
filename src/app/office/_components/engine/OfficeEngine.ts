@@ -26,6 +26,10 @@ export interface EngineCallbacks {
   onRoomChange: (room: OfficeRoom | null) => void;
   onPosition: (x: number, z: number, yaw: number) => void;
   onZoeProximity: (near: boolean) => void;
+  /** The personal-office door the player is standing at, or none. */
+  onDoorProximity?: (
+    door: { roomId: string; canOperate: boolean; open: boolean } | null
+  ) => void;
   onFurnitureSelect: (id: string | null) => void;
   onRequestPlace: (x: number, z: number) => void;
   onRequestMove: (id: string, x: number, z: number) => void;
@@ -459,6 +463,22 @@ export class OfficeEngine {
   private playerStatus: PresenceStatus = "online";
   private currentRoom: OfficeRoom | null = ROOM_BY_ID.reception;
   private nearZoe = false;
+  /** Door leaves on the rendered floor, one per personal office. */
+  private doorRigs: Array<{
+    roomId: string;
+    pivot: THREE.Group;
+    collider: Collider;
+    anchorX: number;
+    anchorZ: number;
+    open: boolean;
+  }> = [];
+  /** Door state outlives a floor rebuild: true is open. */
+  private doorStates = new Map<string, boolean>();
+  private nearDoor: {
+    roomId: string;
+    canOperate: boolean;
+    open: boolean;
+  } | null = null;
   private rooms: OfficeRoom[] = ROOMS;
   private allRooms: OfficeRoom[] = ROOMS;
   private activeFloor = 0;
@@ -1266,6 +1286,7 @@ export class OfficeEngine {
     this.staticColliders = [];
     this.furnitureColliders = [];
     this.furnitureMeshes.clear();
+    this.doorRigs = [];
     this.labelSprites = [];
     this.marker = null;
     this.selectionHelper = null;
@@ -1683,6 +1704,12 @@ export class OfficeEngine {
     lock.position.set(38.5, 2.55, 26);
     lock.scale.set(1.9, 0.5, 1);
     this.buildingGroup.add(lock);
+
+    // The private wing's three offices get real leaves, hinged like the
+    // live building's doors so both modes walk and block the same way.
+    for (const room of this.rooms) {
+      if (room.kind === "personal") this.addRoomDoor(room, 1.6);
+    }
   }
 
   private addRoomLabels() {
@@ -2058,6 +2085,9 @@ export class OfficeEngine {
         );
         mat.position.set(cx, 0.11, b.z + b.d);
         this.buildingGroup.add(mat);
+        if (room.kind === "personal") {
+          this.addRoomDoor(room, doorway);
+        }
       } else {
         const accent = new THREE.Mesh(
           new THREE.BoxGeometry(Math.max(0.5, b.w - 0.4), 0.045, 0.055),
@@ -2083,6 +2113,166 @@ export class OfficeEngine {
       );
       strip.position.set(cx, height - 0.09, cz);
       this.buildingGroup.add(strip);
+    }
+  }
+
+  /**
+   * A shut-able leaf in a personal office's doorway. It hinges on the west
+   * jamb and swings into the room, so the corridor never loses floor to an
+   * open door. Doors start closed; the owner opens their own from the HUD.
+   */
+  private addRoomDoor(room: OfficeRoom, doorway: number) {
+    const b = room.bounds;
+    // Every room announces its own doorway; the demo's private wing opens
+    // west onto the corridor, the live rooms open south.
+    const anchor = room.door ?? { x: b.x + b.w / 2, z: b.z + b.d };
+    const west = Math.abs(anchor.x - b.x) < 0.25;
+    const leafW = Math.max(0.6, doorway - 0.08);
+    const leafH = 2.0;
+
+    const geometry = west
+      ? new THREE.BoxGeometry(0.06, leafH, leafW)
+      : new THREE.BoxGeometry(leafW, leafH, 0.06);
+    if (west) geometry.translate(0, leafH / 2, leafW / 2);
+    else geometry.translate(leafW / 2, leafH / 2, 0);
+    const leaf = new THREE.Mesh(
+      geometry,
+      new THREE.MeshStandardMaterial({
+        color: PALETTE.woodDark,
+        roughness: 0.62,
+        metalness: 0.06,
+      })
+    );
+    // Hinge on one jamb; the leaf swings into the room, never into the
+    // corridor. Both orientations swing open to +1.5 radians.
+    if (west) leaf.position.set(b.x, 0, anchor.z - doorway / 2 + 0.04);
+    else leaf.position.set(anchor.x - doorway / 2 - 0.04, 0, b.z + b.d);
+    const pivot = new THREE.Group();
+    pivot.add(leaf);
+    const open = this.doorStates.get(room.id) ?? false;
+    pivot.rotation.y = open ? 1.5 : 0;
+
+    // A small window keeps the leaf readable as a door and the corridor bright.
+    const lite = new THREE.Mesh(
+      new THREE.BoxGeometry(
+        west ? 0.03 : leafW * 0.5,
+        0.34,
+        west ? leafW * 0.5 : 0.03
+      ),
+      new THREE.MeshPhysicalMaterial({
+        color: PALETTE.screen,
+        transparent: true,
+        opacity: 0.3,
+        roughness: 0.1,
+        side: THREE.DoubleSide,
+      })
+    );
+    lite.position.set(west ? 0 : leafW / 2, leafH - 0.62, west ? leafW / 2 : 0);
+    leaf.add(lite);
+    const handle = new THREE.Mesh(
+      new THREE.SphereGeometry(0.045, 10, 10),
+      new THREE.MeshStandardMaterial({
+        color: PALETTE.lightWarm,
+        roughness: 0.35,
+        metalness: 0.6,
+      })
+    );
+    handle.position.set(
+      west ? 0.06 : leafW - 0.12,
+      leafH * 0.45,
+      west ? leafW - 0.12 : 0.06
+    );
+    leaf.add(handle);
+
+    this.buildingGroup.add(pivot);
+    this.occlusionWalls.push({
+      mesh: leaf,
+      bounds: new THREE.Box3().setFromObject(leaf).expandByScalar(0.08),
+      depthWrite: true,
+    });
+
+    const collider: Collider = west
+      ? {
+          minX: b.x - 0.14,
+          maxX: b.x + 0.14,
+          minZ: anchor.z - doorway / 2,
+          maxZ: anchor.z + doorway / 2,
+        }
+      : {
+          minX: anchor.x - doorway / 2,
+          maxX: anchor.x + doorway / 2,
+          minZ: b.z + b.d - 0.14,
+          maxZ: b.z + b.d + 0.14,
+        };
+
+    this.doorRigs.push({
+      roomId: room.id,
+      pivot,
+      collider,
+      anchorX: anchor.x,
+      anchorZ: anchor.z,
+      open,
+    });
+  }
+
+  /** Opens or closes a room's door; false when the room has no leaf here. */
+  setDoor(roomId: string, open: boolean): boolean {
+    this.doorStates.set(roomId, open);
+    const rig = this.doorRigs.find((candidate) => candidate.roomId === roomId);
+    if (!rig) return false;
+    rig.open = open;
+    this.rebuildColliders();
+    if (this.nearDoor?.roomId === roomId) {
+      this.nearDoor = { ...this.nearDoor, open };
+      this.callbacks.onDoorProximity?.(this.nearDoor);
+    }
+    return true;
+  }
+
+  isDoorOpen(roomId: string): boolean {
+    return this.doorStates.get(roomId) ?? false;
+  }
+
+  /** Swings any leaf still moving toward its target angle. */
+  private updateDoors(dt: number) {
+    for (const rig of this.doorRigs) {
+      const target = rig.open ? 1.5 : 0;
+      const current = rig.pivot.rotation.y;
+      if (Math.abs(target - current) < 0.002) {
+        if (current !== target) rig.pivot.rotation.y = target;
+        continue;
+      }
+      rig.pivot.rotation.y = THREE.MathUtils.damp(current, target, 7, dt);
+    }
+  }
+
+  private updateRoomDoorProximity() {
+    let best: { roomId: string; canOperate: boolean; open: boolean } | null =
+      null;
+    let bestDistance = 2.2;
+    for (const rig of this.doorRigs) {
+      const distance = Math.hypot(
+        this.playerPosition.x - rig.anchorX,
+        this.playerPosition.z - rig.anchorZ
+      );
+      if (distance > bestDistance) continue;
+      const room = this.rooms.find((candidate) => candidate.id === rig.roomId);
+      if (!room) continue;
+      bestDistance = distance;
+      best = {
+        roomId: rig.roomId,
+        canOperate:
+          room.ownerId === this.selfId || room.id === `personal:${this.selfId}`,
+        open: rig.open,
+      };
+    }
+    const changed =
+      (best?.roomId ?? "") !== (this.nearDoor?.roomId ?? "") ||
+      best?.open !== this.nearDoor?.open ||
+      best?.canOperate !== this.nearDoor?.canOperate;
+    if (changed) {
+      this.nearDoor = best;
+      this.callbacks.onDoorProximity?.(best);
     }
   }
 
@@ -2517,9 +2707,14 @@ export class OfficeEngine {
   }
 
   private rebuildColliders() {
+    const doorColliders: Collider[] = [];
+    for (const rig of this.doorRigs) {
+      if (!rig.open) doorColliders.push(rig.collider);
+    }
     this.colliders = this.wallColliders.concat(
       this.staticColliders,
-      this.furnitureColliders
+      this.furnitureColliders,
+      doorColliders
     );
   }
 
@@ -4719,6 +4914,7 @@ export class OfficeEngine {
     this.updateWallOcclusion(dt);
     this.updateMarker();
     this.updateRoomCheck();
+    this.updateDoors(dt);
     this.updateProximity();
     this.updateFloorLights();
 
@@ -5168,6 +5364,7 @@ export class OfficeEngine {
       this.nearZoe = near;
       this.callbacks.onZoeProximity(near);
     }
+    this.updateRoomDoorProximity();
   }
 
   private pushPosition(force = false) {

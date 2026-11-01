@@ -333,6 +333,11 @@ export default function OfficeDemo({
     source.mode === "demo" ? "live" : "connecting"
   );
   const [nearZoe, setNearZoe] = useState(false);
+  const [nearDoor, setNearDoor] = useState<{
+    roomId: string;
+    canOperate: boolean;
+    open: boolean;
+  } | null>(null);
 
   const [towerOpen, setTowerOpen] = useState(false);
   const [towerFocus, setTowerFocus] = useState<number | null>(null);
@@ -528,6 +533,7 @@ export default function OfficeDemo({
     presence,
     presenceState,
     nearZoe,
+    nearDoor,
     towerOpen,
     editorActive,
     editorCatalogId,
@@ -555,6 +561,7 @@ export default function OfficeDemo({
     presence,
     presenceState,
     nearZoe,
+    nearDoor,
     towerOpen,
     editorActive,
     editorCatalogId,
@@ -777,6 +784,10 @@ export default function OfficeDemo({
       const key = event.key.toLowerCase();
       if (key === "e") {
         event.preventDefault();
+        if (state.nearDoor?.canOperate) {
+          toggleNearDoor();
+          return;
+        }
         openZoe();
       } else if (key === "b") {
         event.preventDefault();
@@ -1249,6 +1260,7 @@ export default function OfficeDemo({
     onRoomChange: handleRoomChange,
     onPosition: (x, z, yaw) => setPlayer({ x, z, yaw }),
     onZoeProximity: setNearZoe,
+    onDoorProximity: setNearDoor,
     onFurnitureSelect: (id) => {
       setSelectedFurnitureId(id);
       if (id) {
@@ -1646,6 +1658,31 @@ export default function OfficeDemo({
     engineRef.current?.faceZoe();
   }
 
+  function toggleNearDoor() {
+    const door = stateRef.current.nearDoor;
+    const engine = engineRef.current;
+    if (!door || !engine || !door.canOperate) return;
+    const open = !engine.isDoorOpen(door.roomId);
+    engine.setDoor(door.roomId, open);
+    source.publishDoorState?.(door.roomId, open);
+  }
+
+  // Everyone watching a floor with offices listens on its offices'
+  // channels, so an owner's Open/Close shows on every screen there.
+  useEffect(() => {
+    if (source.mode !== "live" || !source.watchFloorDoors) return;
+    const ids = source.rooms
+      .filter(
+        (room) =>
+          room.kind === "personal" && (room.floorIndex ?? 0) === activeFloor
+      )
+      .map((room) => room.id);
+    if (!ids.length) return;
+    return source.watchFloorDoors(ids, (roomId, open) => {
+      engineRef.current?.setDoor(roomId, open);
+    });
+  }, [source, activeFloor]);
+
   function openAvatar() {
     setAvatarDraft(avatar);
     setAvatarOpen(true);
@@ -2032,6 +2069,8 @@ export default function OfficeDemo({
               self?.role ?? (source.mode === "demo" ? "Product Designer" : "")
             }
             nearZoe={nearZoe}
+            doorPrompt={nearDoor?.canOperate ? { open: nearDoor.open } : null}
+            onToggleDoor={toggleNearDoor}
             unread={unread}
             chatOpen={chatOpen}
             editorOpen={editorActive}

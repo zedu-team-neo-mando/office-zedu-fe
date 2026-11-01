@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Compass,
+  DoorClosed,
   DoorOpen,
   HelpCircle,
   LogOut,
@@ -44,6 +45,8 @@ interface HudProps {
   selfName: string;
   selfRole: string;
   nearZoe: boolean;
+  /** Standing at the player's own office door; the leaf can be worked. */
+  doorPrompt: { open: boolean } | null;
   unread: number;
   chatOpen: boolean;
   editorOpen: boolean;
@@ -59,6 +62,7 @@ interface HudProps {
   onExit: () => void;
   onNavigate: (roomId: string) => void;
   onInteract: () => void;
+  onToggleDoor: () => void;
 }
 
 const STATUS_DOT: Record<PresenceStatus, string> = {
@@ -81,6 +85,7 @@ export default function Hud({
   selfName,
   selfRole,
   nearZoe,
+  doorPrompt,
   unread,
   chatOpen,
   editorOpen,
@@ -96,6 +101,7 @@ export default function Hud({
   onExit,
   onNavigate,
   onInteract,
+  onToggleDoor,
 }: HudProps) {
   const roomLabel = room?.name ?? "Corridor";
   const roomAccent = room?.accent ?? "#a78bfa";
@@ -267,7 +273,37 @@ export default function Hud({
       </div>
 
       <div className="pointer-events-none absolute bottom-3 left-1/2 z-30 hidden w-full max-w-[38rem] -translate-x-1/2 px-3 sm:bottom-5 md:block">
-        {nearZoe ? (
+        {doorPrompt ? (
+          <div className="office-glass pointer-events-auto mx-auto flex w-fit items-center gap-3 rounded-2xl border-[#a78bfa]/30 bg-[#171423]/90 px-4 py-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#a78bfa]/15 text-[#a78bfa]">
+              {doorPrompt.open ? (
+                <DoorClosed className="h-4 w-4" />
+              ) : (
+                <DoorOpen className="h-4 w-4" />
+              )}
+            </span>
+            <div>
+              <p className="text-[0.72rem] font-extrabold uppercase tracking-[0.16em] text-[#a78bfa]">
+                Your door
+              </p>
+              <p className="text-[0.78rem] font-semibold text-[#d8dced]">
+                {doorPrompt.open
+                  ? "Open — people can walk straight in"
+                  : "Closed — the doorway is blocked"}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="office-button-primary !h-10 !rounded-xl !px-3.5 !text-[0.78rem]"
+              onClick={onToggleDoor}
+            >
+              <span className="office-kbd !border-white/20 !bg-white/10">
+                E
+              </span>
+              {doorPrompt.open ? "Close" : "Open"}
+            </button>
+          </div>
+        ) : nearZoe ? (
           <div className="office-glass pointer-events-auto mx-auto flex w-fit items-center gap-3 rounded-2xl border-[#f4c46a]/30 bg-[#171423]/90 px-4 py-2.5">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#f4c46a]/15 text-[#f4c46a]">
               <Sparkles className="h-4.5 w-4.5" />
@@ -350,8 +386,10 @@ export default function Hud({
       {isMobile && (
         <MobileControls
           nearZoe={nearZoe}
+          doorPrompt={doorPrompt}
           editorOpen={editorOpen}
           onInteract={onInteract}
+          onToggleDoor={onToggleDoor}
           onToggleEditor={onToggleEditor}
         />
       )}
@@ -576,13 +614,17 @@ export function Minimap({
 
 function MobileControls({
   nearZoe,
+  doorPrompt,
   editorOpen,
   onInteract,
+  onToggleDoor,
   onToggleEditor,
 }: {
   nearZoe: boolean;
+  doorPrompt: { open: boolean } | null;
   editorOpen: boolean;
   onInteract: () => void;
+  onToggleDoor: () => void;
   onToggleEditor: () => void;
 }) {
   const padRef = useRef<HTMLDivElement>(null);
@@ -642,6 +684,20 @@ function MobileControls({
       </div>
 
       <div className="pointer-events-auto flex flex-col items-end gap-2">
+        {doorPrompt && (
+          <button
+            type="button"
+            onClick={onToggleDoor}
+            className="flex items-center gap-2 rounded-2xl border border-[#a78bfa]/40 bg-[#a78bfa]/15 px-3.5 py-2.5 text-[0.72rem] font-extrabold uppercase tracking-[0.12em] text-[#a78bfa] backdrop-blur"
+          >
+            {doorPrompt.open ? (
+              <DoorClosed className="h-4 w-4" />
+            ) : (
+              <DoorOpen className="h-4 w-4" />
+            )}
+            {doorPrompt.open ? "Close door" : "Open door"}
+          </button>
+        )}
         {nearZoe && (
           <button
             type="button"

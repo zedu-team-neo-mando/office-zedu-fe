@@ -224,6 +224,19 @@ export interface OfficeSource {
     roomId: string,
     onMessage: (message: OfficeChatMessage) => void
   ): () => void;
+  /**
+   * Announces an owner's door toggle on their office's realtime channel.
+   * Live sources only; the demo's doors are local.
+   */
+  publishDoorState?(roomId: string, open: boolean): void;
+  /**
+   * Watches the door events of offices on the floor being shown, so a
+   * toggle is reflected for everyone standing there. Live sources only.
+   */
+  watchFloorDoors?(
+    roomIds: string[],
+    onToggle: (roomId: string, open: boolean) => void
+  ): () => void;
 }
 
 /** Chat message shape shared by both sources. */
