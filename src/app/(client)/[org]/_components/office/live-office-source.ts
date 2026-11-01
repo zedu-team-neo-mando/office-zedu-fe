@@ -404,8 +404,12 @@ export class LiveOfficeSource implements OfficeSource {
   private doorSubscriptions = new Map<number, any>();
   /** Everyone listening for doors in this tab, so a change shows at once. */
   private doorListeners = new Set<(roomId: string, open: boolean) => void>();
-  /** The room the server last admitted this user to, if any. */
-  private admittedRoomId: string | null = null;
+  /**
+   * The rooms the server has admitted this user to. Entry requests for two
+   * rooms can overlap, so each room's admission is kept on its own: a late
+   * answer for one room never clears another.
+   */
+  private admittedRooms = new Set<string>();
   private lastPose: {
     roomId: string;
     x: number;
@@ -665,16 +669,16 @@ export class LiveOfficeSource implements OfficeSource {
     );
     const refusal = entryErrorFromResponse(response, roomId);
     if (refusal) {
-      if (this.admittedRoomId === roomId) this.admittedRoomId = null;
+      this.admittedRooms.delete(roomId);
       throw refusal;
     }
-    this.admittedRoomId = roomId;
+    this.admittedRooms.add(roomId);
     this.publishOverSocket(roomId, "join");
   }
 
   async leaveRoom(roomId: string) {
     this.publishOverSocket(roomId, "leave");
-    if (this.admittedRoomId === roomId) this.admittedRoomId = null;
+    this.admittedRooms.delete(roomId);
     unwrap(
       await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/leave`, {}),
       "The room could not be left."
@@ -718,7 +722,7 @@ export class LiveOfficeSource implements OfficeSource {
   ): boolean {
     const subscription = this.presenceSubscription;
     if (
-      this.admittedRoomId !== roomId ||
+      !this.admittedRooms.has(roomId) ||
       !subscription ||
       this.presenceRoomId !== roomId ||
       subscription.state !== "subscribed"

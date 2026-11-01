@@ -91,16 +91,19 @@ export function RoomDirectory({
 
   const occupancy = useMemo(() => {
     const map: Record<string, number> = {};
-    // Presence only covers the room the player stands in, so other rooms use
-    // the headcount the server last reported for them.
-    for (const [id, count] of Object.entries(roomCounts ?? {})) {
-      if (id !== playerRoomId && count > 0) map[id] = count;
-    }
     for (const agent of presence) {
       if (agent.roomId === "lobby") continue;
       map[agent.roomId] = (map[agent.roomId] ?? 0) + 1;
     }
+    // Presence streams the room the player stands in; other rooms use the
+    // headcount the server last reported. Right after a room change both can
+    // describe the same people, so the larger figure is kept, not the sum.
+    for (const [id, count] of Object.entries(roomCounts ?? {})) {
+      if (id === playerRoomId) continue;
+      map[id] = Math.max(map[id] ?? 0, count);
+    }
     if (playerRoomId) map[playerRoomId] = (map[playerRoomId] ?? 0) + 1;
+    for (const id of Object.keys(map)) if (map[id] <= 0) delete map[id];
     return map;
   }, [presence, playerRoomId, roomCounts]);
 
