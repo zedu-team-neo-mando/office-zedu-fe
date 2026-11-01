@@ -80,3 +80,35 @@ describe("header search with no matches", () => {
     cy.contains("No matches found").should("be.visible");
     cy.contains("button", 'View all results for "zzqxjv"').should("be.visible");
   });
+
+  it('opens the full results page from "View all results"', () => {
+    stubSearch([]);
+    searchFor("zzqxjv");
+    cy.contains("button", 'View all results for "zzqxjv"').click();
+    cy.location("pathname").should("eq", `/${SLUG}/search`);
+    cy.location("search").should("eq", "?query=zzqxjv");
+  });
+
+  it("still lists results when there are matches", () => {
+    stubSearch([MESSAGE]);
+    searchFor("general");
+    cy.contains("Welcome to general").should("be.visible");
+    cy.contains("No matches found").should("not.exist");
+    cy.contains("button", 'View all results for "general"').should(
+      "be.visible"
+    );
+  });
+
+  it("closes with Escape and with a click outside", () => {
+    stubSearch([]);
+    searchFor("zzqxjv");
+    cy.contains("No matches found").should("be.visible");
+    cy.get("body").type("{esc}");
+    cy.contains("No matches found").should("not.exist");
+
+    cy.get(`input[placeholder="${SEARCH}"]`).click();
+    cy.contains("No matches found").should("be.visible");
+    cy.get("body").click(5, 700);
+    cy.contains("No matches found").should("not.exist");
+  });
+});
