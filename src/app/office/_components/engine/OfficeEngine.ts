@@ -16,6 +16,7 @@ import {
   validatePlacement,
 } from "../office-data";
 import { floorLayoutItems, roomLayoutItems } from "../office-layout";
+import { outsideDoor } from "../office-entry";
 import type { OfficeFloor, OfficeOccupant } from "~/types/office";
 import { TowerScene, type TowerOffice } from "./tower-scene";
 import { INK_CSS, PALETTE, PAPER_CSS } from "./palette";
@@ -1372,6 +1373,26 @@ export class OfficeEngine {
       this.nearDoorId = nearId;
       this.callbacks.onDoorProximity?.(nearId);
     }
+  }
+
+  /**
+   * Puts the player back in the corridor just outside a room's door. Used
+   * when the server refuses entry, so a visitor to a full Focus pod is not
+   * left standing (or sitting) inside it. Does nothing once the player has
+   * already walked somewhere else.
+   */
+  stepOutOfRoom(roomId: string) {
+    if (this.currentRoom?.id !== roomId) return false;
+    const room = this.allRooms.find((item) => item.id === roomId);
+    if (!room) return false;
+    const spot = outsideDoor(room);
+    this.seated = null;
+    this.pendingSeat = null;
+    this.movePlayerTo(spot.x, spot.z, spot.yaw);
+    if (this.playerRig) {
+      this.playerRig.group.position.set(spot.x, 0, spot.z);
+    }
+    return true;
   }
 
   showBubble(userId: string, text: string) {

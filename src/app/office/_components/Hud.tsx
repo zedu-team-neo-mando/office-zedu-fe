@@ -53,6 +53,8 @@ interface HudProps {
   editorOpen: boolean;
   isMobile: boolean;
   mapOpen: boolean;
+  /** Rooms known to be at capacity, such as an occupied Focus pod. */
+  fullRoomIds?: ReadonlySet<string>;
   onToggleMap: () => void;
   onOpenDirectory: () => void;
   onOpenAvatar: () => void;
@@ -92,6 +94,7 @@ export default function Hud({
   editorOpen,
   isMobile,
   mapOpen,
+  fullRoomIds,
   onToggleMap,
   onOpenDirectory,
   onOpenAvatar,
@@ -256,6 +259,7 @@ export default function Hud({
             currentRoomId={currentRoomId}
             player={player}
             presence={presence}
+            fullRoomIds={fullRoomIds}
             onNavigate={onNavigate}
             onClose={onToggleMap}
             compact={isMobile}
@@ -404,6 +408,7 @@ export function Minimap({
   currentRoomId,
   player,
   presence,
+  fullRoomIds,
   onNavigate,
   onClose,
   compact = false,
@@ -412,6 +417,7 @@ export function Minimap({
   currentRoomId: string | null;
   player: { x: number; z: number; yaw: number };
   presence: PresencePoint[];
+  fullRoomIds?: ReadonlySet<string>;
   onNavigate: (roomId: string) => void;
   onClose: () => void;
   compact?: boolean;
@@ -494,6 +500,7 @@ export function Minimap({
         />
         {rooms.map((room) => {
           const active = room.id === currentRoomId;
+          const full = !active && Boolean(fullRoomIds?.has(room.id));
           return (
             <g key={room.id}>
               <rect
@@ -502,16 +509,29 @@ export function Minimap({
                 width={room.bounds.w}
                 height={room.bounds.d}
                 rx="0.55"
-                fill={room.accent}
-                fillOpacity={active ? 0.42 : 0.14}
-                stroke={active ? "#ffffff" : room.accent}
-                strokeOpacity={active ? 0.85 : 0.38}
+                fill={full ? "#f43f5e" : room.accent}
+                fillOpacity={active ? 0.42 : full ? 0.2 : 0.14}
+                stroke={active ? "#ffffff" : full ? "#fb7185" : room.accent}
+                strokeOpacity={active ? 0.85 : full ? 0.7 : 0.38}
                 strokeWidth={active ? 0.28 : 0.16}
                 className="office-minimap-room"
                 onClick={() => onNavigate(room.id)}
               >
-                <title>{room.name}</title>
+                <title>{full ? `${room.name} · Full` : room.name}</title>
               </rect>
+              {full && (
+                <text
+                  x={room.bounds.x + room.bounds.w / 2}
+                  y={room.bounds.z + room.bounds.d / 2 + 0.45}
+                  textAnchor="middle"
+                  fontSize="1.25"
+                  fontWeight="800"
+                  fill="#fb7185"
+                  pointerEvents="none"
+                >
+                  FULL
+                </text>
+              )}
               {(room.kind === "channel" ||
                 room.kind === "lounge" ||
                 room.kind === "reception") && (

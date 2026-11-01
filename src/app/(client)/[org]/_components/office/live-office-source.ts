@@ -29,6 +29,7 @@ import type {
   OfficeZoeContext,
 } from "~/types/office";
 import { ROOMS } from "~/app/office/_components/office-data";
+import { entryErrorFromResponse } from "~/app/office/_components/office-entry";
 import {
   ownsPersonalOffice,
   personalOfficeTemplate,
@@ -403,6 +404,12 @@ export class LiveOfficeSource implements OfficeSource {
   private doorSubscriptions = new Map<number, any>();
   /** Everyone listening for doors in this tab, so a change shows at once. */
   private doorListeners = new Set<(roomId: string, open: boolean) => void>();
+  /**
+   * The rooms the server has admitted this user to. Entry requests for two
+   * rooms can overlap, so each room's admission is kept on its own: a late
+   * answer for one room never clears another.
+   */
+  private admittedRooms = new Set<string>();
   private lastPose: {
     roomId: string;
     x: number;
@@ -647,22 +654,31 @@ export class LiveOfficeSource implements OfficeSource {
     throw new Error("Zoe could not answer that right now.");
   }
 
+  /**
+   * Asks the server to let this user into a room. The server owns the
+   * decision, so nothing is published to the room until it says yes: a
+   * refused visitor (a full Focus pod, a locked office) is never announced as
+   * standing inside, and the refusal is thrown for the office to act on.
+   */
   async enterRoom(roomId: string) {
-    this.publishOverSocket(roomId, "join");
-    try {
-      unwrap(
-        await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/enter`, {}),
-        "The room could not be entered."
-      );
-    } catch {
-      // Presence also travels over the room's realtime channel, so a refused
-      // entry must not stop this avatar from being published to the room.
+    // The silent helper hands the refusal back instead of toasting it, so the
+    // office can say once, in its own words, why the door stayed shut.
+    const response = await BuzzRequest(
+      `/office/rooms/${encodeRoomId(roomId)}/enter`,
+      {}
+    );
+    const refusal = entryErrorFromResponse(response, roomId);
+    if (refusal) {
+      this.admittedRooms.delete(roomId);
+      throw refusal;
     }
+    this.admittedRooms.add(roomId);
     this.publishOverSocket(roomId, "join");
   }
 
   async leaveRoom(roomId: string) {
     this.publishOverSocket(roomId, "leave");
+    this.admittedRooms.delete(roomId);
     unwrap(
       await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/leave`, {}),
       "The room could not be left."
@@ -696,7 +712,9 @@ export class LiveOfficeSource implements OfficeSource {
 
   /**
    * Publishes this user's presence on the room channel the client is
-   * subscribed to. Returns false when that room's subscription is not live.
+   * subscribed to. Returns false when that room's subscription is not live,
+   * or when the server has not admitted this user to the room: being able to
+   * read a room's roster is not the same as standing in it.
    */
   private publishOverSocket(
     roomId: string,
@@ -704,6 +722,7 @@ export class LiveOfficeSource implements OfficeSource {
   ): boolean {
     const subscription = this.presenceSubscription;
     if (
+      !this.admittedRooms.has(roomId) ||
       !subscription ||
       this.presenceRoomId !== roomId ||
       subscription.state !== "subscribed"
@@ -897,6 +916,9 @@ export class LiveOfficeSource implements OfficeSource {
       // read the room again: it holds everyone the stream did not carry.
       onState?.("live");
       resync();
+      // Only a reconnect re-announces this avatar; a first subscription is
+      // still waiting on the server to admit it, and publishOverSocket stays
+      // quiet until then.
       this.publishOverSocket(roomId, "join");
       subscription
         .publish({ type: "query", roomId, senderId: this.userId })
