@@ -214,6 +214,27 @@ export function demoTowerOffices(
 const DEMO_CHANNEL_NAME = "zedu_office_demo_multiplayer";
 
 let demoBroadcastChannel: BroadcastChannel | null = null;
+const DEMO_DOORS_KEY = "office_demo_doors";
+const demoDoorListeners = new Set<(roomId: string, open: boolean) => void>();
+
+function readDemoDoors(): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DEMO_DOORS_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDemoDoors(doors: Record<string, boolean>) {
+  try {
+    localStorage.setItem(DEMO_DOORS_KEY, JSON.stringify(doors));
+  } catch {
+    // Private browsing: the door still changes in this tab.
+  }
+}
+
 function getDemoChannel(): BroadcastChannel | null {
   if (
     typeof window === "undefined" ||
@@ -479,6 +500,37 @@ export const demoSource: OfficeSource = {
     if (!roomMap) return [];
     const identity = getDemoIdentity();
     return [...roomMap.values()].filter((occ) => occ.userId !== identity.id);
+  },
+
+  async setDoor(roomId: string, open: boolean) {
+    const doors = readDemoDoors();
+    doors[roomId] = open;
+    writeDemoDoors(doors);
+    for (const listener of demoDoorListeners) listener(roomId, open);
+    getDemoChannel()?.postMessage({ type: "office_door", roomId, open });
+  },
+
+  subscribeDoors(
+    _floorIndex: number,
+    onDoor: (roomId: string, open: boolean) => void
+  ) {
+    // The demo keeps its doors in this browser, so every tab agrees on them.
+    for (const [roomId, open] of Object.entries(readDemoDoors())) {
+      onDoor(roomId, open);
+    }
+    demoDoorListeners.add(onDoor);
+    const channel = getDemoChannel();
+    const handler = (event: MessageEvent) => {
+      const data = event.data;
+      if (data?.type === "office_door" && typeof data.roomId === "string") {
+        onDoor(data.roomId, Boolean(data.open));
+      }
+    };
+    channel?.addEventListener("message", handler);
+    return () => {
+      demoDoorListeners.delete(onDoor);
+      channel?.removeEventListener("message", handler);
+    };
   },
 
   subscribePresence(

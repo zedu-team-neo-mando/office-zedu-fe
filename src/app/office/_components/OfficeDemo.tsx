@@ -333,6 +333,10 @@ export default function OfficeDemo({
     source.mode === "demo" ? "live" : "connecting"
   );
   const [nearZoe, setNearZoe] = useState(false);
+  /** Personal-office doors the owners have opened or shut, by room id. */
+  const [doorStates, setDoorStates] = useState<Record<string, boolean>>({});
+  /** The personal-office door the player is standing at, if any. */
+  const [nearDoorId, setNearDoorId] = useState<string | null>(null);
 
   const [towerOpen, setTowerOpen] = useState(false);
   const [towerFocus, setTowerFocus] = useState<number | null>(null);
@@ -489,6 +493,29 @@ export default function OfficeDemo({
   );
   const canEditRoomRef = useRef(canEditRoom);
   canEditRoomRef.current = canEditRoom;
+
+  // Only the owner works their own door. The demo's own office belongs to the
+  // seeded "you", whichever demo identity this tab was given.
+  const ownsOffice = useCallback(
+    (room: (typeof rooms)[number] | null | undefined) =>
+      Boolean(
+        room &&
+        room.kind === "personal" &&
+        (room.ownerId === selfId ||
+          room.id === `personal:${selfId}` ||
+          (source.mode === "demo" && room.ownerId === "you"))
+      ),
+    [selfId, source.mode]
+  );
+  const nearDoorRoom = nearDoorId ? (roomById[nearDoorId] ?? null) : null;
+  const nearDoor = nearDoorRoom
+    ? {
+        roomId: nearDoorRoom.id,
+        name: nearDoorRoom.name,
+        open: doorStates[nearDoorRoom.id] !== false,
+        own: ownsOffice(nearDoorRoom),
+      }
+    : null;
   const canEdit = canEditRoom(currentRoom);
   const chatRoom = chatTargetId
     ? (roomById[chatTargetId] ?? currentRoom)
@@ -528,6 +555,7 @@ export default function OfficeDemo({
     presence,
     presenceState,
     nearZoe,
+    nearDoor,
     towerOpen,
     editorActive,
     editorCatalogId,
@@ -555,6 +583,7 @@ export default function OfficeDemo({
     presence,
     presenceState,
     nearZoe,
+    nearDoor,
     towerOpen,
     editorActive,
     editorCatalogId,
@@ -605,6 +634,8 @@ export default function OfficeDemo({
           onTowerPick: (office) => handlersRef.current?.onTowerPick?.(office),
           onTowerHover: (office) => handlersRef.current?.onTowerHover?.(office),
           onFloorChange: (floorIndex) => setActiveFloor(floorIndex),
+          onDoorProximity: (roomId) =>
+            handlersRef.current?.onDoorProximity?.(roomId),
         },
         {
           isMobile: mobile,
@@ -777,7 +808,8 @@ export default function OfficeDemo({
       const key = event.key.toLowerCase();
       if (key === "e") {
         event.preventDefault();
-        openZoe();
+        if (!state.nearZoe && state.nearDoor?.own) toggleDoor();
+        else openZoe();
       } else if (key === "b") {
         event.preventDefault();
         toggleEditor();
@@ -978,6 +1010,23 @@ export default function OfficeDemo({
     // itself, because that avatar is the one the player is already steering.
     engineRef.current?.setOccupants(occupants);
   }, []);
+
+  // Office doors are heard per storey: the owners say whether theirs is open,
+  // and every viewer on the floor draws the same thing.
+  useEffect(() => {
+    if (phase !== "office" || !source.subscribeDoors) return;
+    return source.subscribeDoors(activeFloor, (doorRoomId, open) => {
+      setDoorStates((previous) =>
+        previous[doorRoomId] === open
+          ? previous
+          : { ...previous, [doorRoomId]: open }
+      );
+    });
+  }, [source, phase, activeFloor]);
+
+  useEffect(() => {
+    engineRef.current?.setDoors(doorStates);
+  }, [doorStates, ready]);
 
   // Presence, room entry and movement publishing all follow the room the user
   // is in, and all of them are sequenced in one place.
@@ -1249,6 +1298,7 @@ export default function OfficeDemo({
     onRoomChange: handleRoomChange,
     onPosition: (x, z, yaw) => setPlayer({ x, z, yaw }),
     onZoeProximity: setNearZoe,
+    onDoorProximity: setNearDoorId,
     onFurnitureSelect: (id) => {
       setSelectedFurnitureId(id);
       if (id) {
@@ -1628,6 +1678,27 @@ export default function OfficeDemo({
     );
   }
 
+  function toggleDoor() {
+    const door = stateRef.current.nearDoor;
+    if (!door) return;
+    if (!door.own) {
+      showInfo(
+        door.open ? "Not your door" : "The door is shut",
+        door.open
+          ? `Only ${door.name} can open or close this door.`
+          : `${door.name} has shut their door. Say hello in the conversation instead.`
+      );
+      return;
+    }
+    if (!source.setDoor) return;
+    source.setDoor(door.roomId, !door.open).catch((error: unknown) => {
+      showError(
+        "The door didn't move",
+        error instanceof Error ? error.message : "Please try again."
+      );
+    });
+  }
+
   function openZoe() {
     const state = stateRef.current;
     if (!state.nearZoe) {
@@ -1898,6 +1969,13 @@ export default function OfficeDemo({
       );
       return;
     }
+    if (doorStates[id] === false && !ownsOffice(room)) {
+      showInfo(
+        "The door is shut",
+        `${room.name} has shut their door. Say hello in the conversation instead.`
+      );
+      return;
+    }
     const engine = engineRef.current;
     if (!engine) return;
     closeEditor();
@@ -2032,6 +2110,8 @@ export default function OfficeDemo({
               self?.role ?? (source.mode === "demo" ? "Product Designer" : "")
             }
             nearZoe={nearZoe}
+            door={nearDoor}
+            onToggleDoor={toggleDoor}
             unread={unread}
             chatOpen={chatOpen}
             editorOpen={editorActive}

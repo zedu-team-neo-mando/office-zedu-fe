@@ -47,6 +47,8 @@ export interface EngineCallbacks {
   onTowerHover?: (office: TowerOffice | null) => void;
   /** The floor the 3D interior is showing changed. */
   onFloorChange?: (floorIndex: number) => void;
+  /** The personal-office door the player is standing at, or null. */
+  onDoorProximity?: (roomId: string | null) => void;
 }
 
 export interface EditState {
@@ -198,6 +200,41 @@ function css(hex: number): string {
 type FloorFinish = "wood" | "carpet" | "terrazzo";
 
 /** Rooms you can shut a door on; everything else is an open zone on the plan. */
+/** The demo floor's door frames: centre x, centre z, width, orientation. */
+const DEMO_DOOR_FRAMES: Array<[number, number, number, "h" | "v"]> = [
+  [9, 13, 2, "h"],
+  [23.5, 13, 2, "h"],
+  [36.5, 13, 2, "h"],
+  [9, 14, 2, "h"],
+  [9, 24, 2, "h"],
+  [6.5, 26, 2, "h"],
+  [17.5, 26, 2, "h"],
+  [28.5, 26, 2, "h"],
+  [49, 12.5, 1.6, "v"],
+  [49, 20.5, 1.6, "v"],
+  [49, 29.5, 1.6, "v"],
+  [44, 25, 2, "v"],
+];
+
+/** How close the player has to be to a door to open or close it. */
+const DOOR_REACH = 1.9;
+/** Radians per second a door swings at. */
+const DOOR_SWING_SPEED = 5;
+
+/** A personal office's door leaf, hinged on one jamb. */
+interface DoorRig {
+  roomId: string;
+  pivot: THREE.Group;
+  /** Where a player stands to use it: the middle of the doorway. */
+  x: number;
+  z: number;
+  /** Which way the wall runs, and half the doorway's width. */
+  alongX: boolean;
+  halfWidth: number;
+  closedYaw: number;
+  openYaw: number;
+}
+
 function isClosedRoom(kind: OfficeRoom["kind"]): boolean {
   return kind === "personal" || kind === "meeting" || kind === "focus";
 }
@@ -451,6 +488,10 @@ export class OfficeEngine {
   private path: Array<{ x: number; z: number }> = [];
   private pathIndex = 0;
   private lastInputAt = 0;
+  /** Personal-office doors: false means the owner has shut it. */
+  private doorOpen = new Map<string, boolean>();
+  private doorRigs: DoorRig[] = [];
+  private nearDoorId: string | null = null;
   /** The seat the player is sitting on, and the one they are walking to. */
   private seated: THREE.Object3D | null = null;
   private pendingSeat: THREE.Object3D | null = null;
@@ -1168,6 +1209,171 @@ export class OfficeEngine {
     this.pushPosition(true);
   }
 
+  /**
+   * The open or shut state of personal-office doors, by room id. A room that
+   * is not listed keeps an open door, which is how every office starts.
+   */
+  setDoors(states: Record<string, boolean>) {
+    this.doorOpen = new Map(Object.entries(states));
+    this.lastRoomCheck = 0;
+  }
+
+  /** Whether the signed-in person owns this office. */
+  private ownsRoom(roomId: string) {
+    const room = this.allRooms.find((item) => item.id === roomId);
+    if (!room || room.kind !== "personal") return false;
+    return (
+      room.ownerId === this.selfId ||
+      room.id === `personal:${this.selfId}` ||
+      // The demo's own office belongs to its seeded "you".
+      (!this.isLive && room.ownerId === "you")
+    );
+  }
+
+  isDoorOpen(roomId: string) {
+    return this.doorOpen.get(roomId) !== false;
+  }
+
+  /**
+   * One door leaf per personal office on this storey, hinged on the doorway's
+   * left jamb. It is built open or shut to match the current state and swings
+   * from then on.
+   */
+  private addOfficeDoors() {
+    const leafMaterial = new THREE.MeshStandardMaterial({
+      color: PALETTE.woodDark,
+      roughness: 0.58,
+      metalness: 0.08,
+    });
+    const handleMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd8dbea,
+      roughness: 0.3,
+      metalness: 0.8,
+    });
+
+    for (const room of this.rooms) {
+      if (room.kind !== "personal") continue;
+      const doorway = this.doorwayFor(room);
+      if (!doorway) continue;
+
+      const { x, z, width, alongX, inward } = doorway;
+      const leafWidth = width * 0.96;
+      const height = 2.06;
+      // The direction the wall runs and the direction into the room, as yaws:
+      // a leaf built along +x points wherever its pivot's yaw sends it.
+      const wallDir = alongX ? { x: 1, z: 0 } : { x: 0, z: 1 };
+      const closedYaw = Math.atan2(-wallDir.z, wallDir.x);
+      const openYaw = Math.atan2(-inward.z, inward.x);
+
+      const pivot = new THREE.Group();
+      pivot.position.set(
+        x - (wallDir.x * leafWidth) / 2,
+        0,
+        z - (wallDir.z * leafWidth) / 2
+      );
+      const leaf = new THREE.Mesh(
+        new THREE.BoxGeometry(leafWidth, height, 0.06),
+        leafMaterial
+      );
+      leaf.position.set(leafWidth / 2, height / 2 + 0.02, 0);
+      leaf.castShadow = true;
+      pivot.add(leaf);
+      for (const side of [-1, 1]) {
+        const handle = new THREE.Mesh(
+          new THREE.BoxGeometry(0.16, 0.04, 0.05),
+          handleMaterial
+        );
+        handle.position.set(leafWidth - 0.16, 1.02, side * 0.06);
+        pivot.add(handle);
+      }
+      pivot.rotation.y = this.isDoorOpen(room.id) ? openYaw : closedYaw;
+      pivot.name = `door:${room.id}`;
+      this.buildingGroup.add(pivot);
+
+      this.doorRigs.push({
+        roomId: room.id,
+        pivot,
+        x,
+        z,
+        alongX,
+        halfWidth: width / 2,
+        closedYaw,
+        openYaw,
+      });
+    }
+  }
+
+  /**
+   * Where a personal office's doorway is. The live building opens every room
+   * on its south wall with a doorway sized from the room; the demo's private
+   * wing has hand-placed frames, so the frame nearest the room's door is used.
+   */
+  private doorwayFor(room: OfficeRoom) {
+    const b = room.bounds;
+    if (this.isLive) {
+      return {
+        x: b.x + b.w / 2,
+        z: b.z + b.d,
+        width: Math.min(1.7, Math.max(1, b.w * 0.42)),
+        alongX: true,
+        inward: { x: 0, z: -1 },
+      };
+    }
+
+    let best: (typeof DEMO_DOOR_FRAMES)[number] | null = null;
+    let bestDistance = Infinity;
+    for (const frame of DEMO_DOOR_FRAMES) {
+      const distance = Math.hypot(
+        frame[0] - room.door.x,
+        frame[1] - room.door.z
+      );
+      if (distance < bestDistance) {
+        best = frame;
+        bestDistance = distance;
+      }
+    }
+    if (!best || bestDistance > 1.5) return null;
+    const [x, z, width, orientation] = best;
+    const alongX = orientation === "h";
+    const cx = b.x + b.w / 2;
+    const cz = b.z + b.d / 2;
+    const inward = alongX
+      ? { x: 0, z: Math.sign(cz - z) || 1 }
+      : { x: Math.sign(cx - x) || 1, z: 0 };
+    return { x, z, width, alongX, inward };
+  }
+
+  /** Swings each door toward its state and reports the one the player is at. */
+  private updateDoors(dt: number) {
+    let nearest: DoorRig | null = null;
+    let nearestDistance = DOOR_REACH;
+    const step = DOOR_SWING_SPEED * dt;
+
+    for (const rig of this.doorRigs) {
+      const target = this.isDoorOpen(rig.roomId) ? rig.openYaw : rig.closedYaw;
+      const delta = target - rig.pivot.rotation.y;
+      rig.pivot.rotation.y =
+        Math.abs(delta) <= step
+          ? target
+          : rig.pivot.rotation.y + Math.sign(delta) * step;
+
+      const distance = Math.hypot(
+        this.playerPosition.x - rig.x,
+        this.playerPosition.z - rig.z
+      );
+      if (distance < nearestDistance) {
+        nearest = rig;
+        nearestDistance = distance;
+      }
+    }
+
+    const nearId = this.cinematic ? null : (nearest?.roomId ?? null);
+    if (nearId !== this.nearDoorId) {
+      this.nearDoorId = nearId;
+      this.callbacks.onDoorProximity?.(nearId);
+    }
+  }
+
   showBubble(userId: string, text: string) {
     const rig =
       userId === "you"
@@ -1231,17 +1437,19 @@ export class OfficeEngine {
   private buildFloorContent() {
     // The demo is a hand-built floor plan. The live building is whatever the
     // organisation actually has, so it is generated from the room list.
+    this.doorRigs = [];
     if (this.isLive) {
       this.buildLiveFloorContent();
-      return;
+    } else {
+      this.addGround();
+      this.addShell();
+      this.addInteriorWalls();
+      this.addFloors();
+      this.addDoorFrames();
+      this.addRoomLabels();
+      this.addStaticFurniture();
     }
-    this.addGround();
-    this.addShell();
-    this.addInteriorWalls();
-    this.addFloors();
-    this.addDoorFrames();
-    this.addRoomLabels();
-    this.addStaticFurniture();
+    this.addOfficeDoors();
   }
 
   /**
@@ -1618,22 +1826,7 @@ export class OfficeEngine {
       roughness: 0.5,
     });
 
-    const doors: Array<[number, number, number, "h" | "v"]> = [
-      [9, 13, 2, "h"],
-      [23.5, 13, 2, "h"],
-      [36.5, 13, 2, "h"],
-      [9, 14, 2, "h"],
-      [9, 24, 2, "h"],
-      [6.5, 26, 2, "h"],
-      [17.5, 26, 2, "h"],
-      [28.5, 26, 2, "h"],
-      [49, 12.5, 1.6, "v"],
-      [49, 20.5, 1.6, "v"],
-      [49, 29.5, 1.6, "v"],
-      [44, 25, 2, "v"],
-    ];
-
-    for (const [x, z, width, orientation] of doors) {
+    for (const [x, z, width, orientation] of DEMO_DOOR_FRAMES) {
       if (orientation === "h") {
         this.addWallBox(
           x - width / 2 - 0.08,
@@ -2539,6 +2732,25 @@ export class OfficeEngine {
       ) {
         return true;
       }
+    }
+
+    // A shut office door is a solid leaf across the doorway, in both
+    // directions: the owner opens it from either side. The one exception is
+    // a visitor who is already inside, who can always walk out, so a door
+    // shut behind a guest never traps them.
+    for (const door of this.doorRigs) {
+      if (this.isDoorOpen(door.roomId)) continue;
+      if (this.currentRoom?.id === door.roomId && !this.ownsRoom(door.roomId))
+        continue;
+      const across = 0.08 + radius;
+      const along = door.halfWidth + 0.05;
+      const inDoorway = (px: number, pz: number) =>
+        door.alongX
+          ? Math.abs(px - door.x) < along && Math.abs(pz - door.z) < across
+          : Math.abs(pz - door.z) < along && Math.abs(px - door.x) < across;
+      // Someone standing in the doorway when it shuts can step out of it.
+      if (inDoorway(this.playerPosition.x, this.playerPosition.z)) continue;
+      if (inDoorway(x, z)) return true;
     }
 
     const inside = this.walkBounds.some(
@@ -4720,6 +4932,7 @@ export class OfficeEngine {
     this.updateMarker();
     this.updateRoomCheck();
     this.updateProximity();
+    this.updateDoors(dt);
     this.updateFloorLights();
 
     if (performance.now() - this.lastPresencePush > 180) {
