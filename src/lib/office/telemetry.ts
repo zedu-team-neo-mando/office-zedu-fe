@@ -238,6 +238,10 @@ class TelemetryTracker {
     } else {
       this.startedAt = now;
       writeStartMarker(now);
+      // Expired 30-minute start marker: rotate to a new session ID so the
+      // old session is not conflated with a new one.
+      this.sessionId = generateEventId();
+      writeSessionId(this.sessionId);
     }
     this.entryPoint = "lobby";
 
@@ -290,6 +294,15 @@ class TelemetryTracker {
     // A portal crossing suppresses the dwell pair it would otherwise produce.
     if (this.suppressNextDwellPair) {
       this.suppressNextDwellPair = false;
+      if (roomId === null || roomId === "") {
+        // Portal crossed into the corridor: skip the entry, clear active room.
+        this.currentRoomId = null;
+        this.currentRoomKind = "";
+        this.currentRoomRef = "";
+        this.currentFloorIndex = floorIndex;
+        this.dwellStartMs = nowMs();
+        return;
+      }
       this.currentRoomId = roomId;
       this.currentRoomKind = roomKind;
       this.currentRoomRef = roomRef;
@@ -418,33 +431,33 @@ class TelemetryTracker {
 
   /**
    * Call when the tower closes — the floor view resumes room detection.
+   * When restoreRoom is true (the default), restores dwell tracking for the
+   * room that was active before the tower opened. When false — used by a
+   * tower dive into a different room — clears tower mode without recording a
+   * return to the previous room.
    * No-op when analytics is disabled.
    */
-  towerClosed(): void {
+  towerClosed(restoreRoom = true): void {
     if (!flagOn()) return;
     this.inTower = false;
-    // Resume dwell tracking for the room that was active before the tower
-    // opened, so tracking restarts even when the player closes the tower
-    // without changing rooms — no new room-entry callback required.
     const preceding = this.towerPrecedingRoom;
     this.towerPrecedingRoom = null;
-    if (preceding) {
-      this.currentRoomId = preceding.id;
-      this.currentRoomKind = preceding.kind;
-      this.currentRoomRef = preceding.ref;
-      this.currentFloorIndex = preceding.floor;
-      this.dwellStartMs = nowMs();
-      if (preceding.id !== null && preceding.id !== "") {
-        this.record({
-          kind: "room.enter",
-          offsetMs: nowMs() - this.startedAt,
-          floorIndex: preceding.floor,
-          roomKind: preceding.kind,
-          roomRef: preceding.ref,
-          dwellMs: 0,
-          via: "",
-        });
-      }
+    if (!restoreRoom || !preceding) return;
+    this.currentRoomId = preceding.id;
+    this.currentRoomKind = preceding.kind;
+    this.currentRoomRef = preceding.ref;
+    this.currentFloorIndex = preceding.floor;
+    this.dwellStartMs = nowMs();
+    if (preceding.id !== null && preceding.id !== "") {
+      this.record({
+        kind: "room.enter",
+        offsetMs: nowMs() - this.startedAt,
+        floorIndex: preceding.floor,
+        roomKind: preceding.kind,
+        roomRef: preceding.ref,
+        dwellMs: 0,
+        via: "",
+      });
     }
   }
 

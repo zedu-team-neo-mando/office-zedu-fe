@@ -1381,7 +1381,7 @@ export default function OfficeDemo({
     setLiftTarget(floorIndex);
     pendingTeleportRef.current = { roomId: targetId, via: "tower" };
     schedule(() => {
-      telemetry.towerClosed();
+      telemetry.towerClosed(false);
       engine.setView("floor");
       engine.focusRoom(targetId);
       setRoomId(targetId);

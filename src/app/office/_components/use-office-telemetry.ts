@@ -90,10 +90,10 @@ export function useOfficeTelemetry({
     tracker.towerOpened();
   }, []);
 
-  const towerClosed = useCallback(() => {
+  const towerClosed = useCallback((restoreRoom = true) => {
     const tracker = trackerRef.current;
     if (!tracker) return;
-    tracker.towerClosed();
+    tracker.towerClosed(restoreRoom);
   }, []);
 
   const teleportArrive = useCallback(
