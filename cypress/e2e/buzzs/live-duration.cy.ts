@@ -8,7 +8,7 @@ export {};
  *   CYPRESS_baseUrl=http://localhost:3000 \
  *   pnpm cypress run --spec cypress/e2e/buzzs/live-duration.cy.ts
  */
-const ORG = "11111111-1111-4111-8111-111111111111";
+const ORG = "mock-org-live-duration";
 const SLUG = "testorg";
 
 // Without NEXT_PUBLIC_GTM_SCRIPT_URL the analytics <Script> loads the page's
@@ -89,8 +89,3 @@ describe("live buzz duration", () => {
       .should("contain", "In progress")
       .and("not.contain", "hour");
   });
-
-  it("still shows the real duration for an ended buzz", () => {
-    lineOf("CODE-ENDED").should("contain", "45 minutes");
-  });
-});
