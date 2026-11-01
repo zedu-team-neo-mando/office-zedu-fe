@@ -11,7 +11,8 @@ overrides:
   dompurify: 3.4.17
   undici: 6.29.1
   fast-uri: 3.1.7
-  lodash@<4.17.12: 4.17.21
+  follow-redirects: 1.16.2
+  lodash@<4.18.0: 4.18.1
   underscore@<1.12.1: 1.13.8
   handlebars@<4.7.10: 4.7.10
 
@@ -8795,10 +8796,10 @@ packages:
     peerDependencies:
       react: ^15.0.2 || ^16.0.0 || ^17.0.0
 
-  follow-redirects@1.16.0:
+  follow-redirects@1.16.2:
     resolution:
       {
-        integrity: sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==,
+        integrity: sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==,
       }
     engines: { node: ">=4.0" }
     peerDependencies:
@@ -10615,12 +10616,6 @@ packages:
     resolution:
       {
         integrity: sha512-sReKOYJIJf74dhJONhU4e0/shzi1trVbSWDOhKYE5XV2O+H7Sb2Dihwuc7xWxVl+DgFPyTqIN3zMfT9cq5iWDg==,
-      }
-
-  lodash@4.17.21:
-    resolution:
-      {
-        integrity: sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg==,
       }
 
   lodash@4.18.1:
@@ -18084,7 +18079,7 @@ snapshots:
       debug: 4.4.3(supports-color@8.1.1)
       dir-glob: 3.0.1
       execa: 5.1.1
-      lodash: 4.17.21
+      lodash: 4.18.1
       micromatch: 4.0.8
       p-reduce: 2.1.0
       semantic-release: 24.2.9(typescript@5.9.3)
@@ -19362,7 +19357,7 @@ snapshots:
 
   axios@1.20.0:
     dependencies:
-      follow-redirects: 1.16.0
+      follow-redirects: 1.16.2
       form-data: 4.0.6
       https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
@@ -21088,7 +21083,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  follow-redirects@1.16.0: {}
+  follow-redirects@1.16.2: {}
 
   for-each@0.3.5:
     dependencies:
@@ -22161,8 +22156,6 @@ snapshots:
   lodash.uniqby@4.7.0: {}
 
   lodash.upperfirst@4.3.1: {}
-
-  lodash@4.17.21: {}
 
   lodash@4.18.1: {}
 
@@ -25859,7 +25852,7 @@ snapshots:
 
   xmlbuilder@2.6.5:
     dependencies:
-      lodash: 4.17.21
+      lodash: 4.18.1
 
   xmlhttprequest-ssl@2.0.0: {}
 
