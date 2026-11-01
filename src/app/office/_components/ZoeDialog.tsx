@@ -20,6 +20,8 @@ interface ZoeMessage {
   role: "assistant" | "user";
   content: string;
   streaming?: boolean;
+  /** Set when a reply was stopped mid-stream or failed, so Zoe never sees it. */
+  excludeFromHistory?: boolean;
 }
 
 export default function ZoeDialog({
@@ -55,7 +57,11 @@ export default function ZoeDialog({
     setThinking(false);
     setStreaming(false);
     setMessages((prev) =>
-      prev.map((message) => ({ ...message, streaming: false }))
+      prev.map((message) =>
+        message.streaming
+          ? { ...message, streaming: false, excludeFromHistory: true }
+          : { ...message, streaming: false }
+      )
     );
   };
 
@@ -102,6 +108,7 @@ export default function ZoeDialog({
         (message) =>
           message.id !== "zoe-greeting" &&
           !message.streaming &&
+          !message.excludeFromHistory &&
           message.content.trim().length > 0
       )
       .slice(-HISTORY_LIMIT)
@@ -152,7 +159,12 @@ export default function ZoeDialog({
               : "Zoe could not answer that right now.";
           setMessages((prev) => [
             ...prev,
-            { id: answerId, role: "assistant", content: message },
+            {
+              id: answerId,
+              role: "assistant",
+              content: message,
+              excludeFromHistory: true,
+            },
           ]);
         });
     }, 700);
