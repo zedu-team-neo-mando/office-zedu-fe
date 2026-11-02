@@ -72,7 +72,7 @@ export default function EntryScreen({
       />
       <div className="office-entry-content">
         <div className="flex items-center gap-3">
-          <img src="/login_logo.svg" alt="Zedu" className="h-7 w-auto" />
+          <img src="/zedu_white.png" alt="Zedu" className="h-7 w-auto" />
           <span className="h-5 w-px bg-white/15" />
           <span className="office-chip border-[#a78bfa]/30 bg-[#a78bfa]/10 text-[#d8cbff]">
             <Sparkles className="h-3 w-3" />

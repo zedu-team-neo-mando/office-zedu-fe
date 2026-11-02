@@ -304,6 +304,41 @@ let latestLocalPose: {
   yaw: number;
 } | null = null;
 
+/**
+ * The demo's portal sits at the south end of the private-wing corridor, in the
+ * same place on every storey, so it reads as a shaft rather than a new wing.
+ * Floors 3 to 9 are directory-only in the demo and have no plan to walk.
+ */
+const DEMO_PORTAL_BOUNDS = { x: 44, z: 30.8, w: 4.2, d: 4.4 };
+
+function demoPortalRooms(): OfficeRoom[] {
+  return [0, 1, 2].map((floorIndex) => ({
+    id: `portal:${floorIndex}`,
+    kind: "portal" as const,
+    name: floorIndex === 0 ? "Private floors" : "Channels",
+    shortName: floorIndex === 0 ? "Private floors" : "Channels",
+    capacity: 0,
+    locked: false,
+    floorIndex,
+    accent: "#a78bfa",
+    floor: "#241d39",
+    bounds: DEMO_PORTAL_BOUNDS,
+    description:
+      floorIndex === 0
+        ? "The door back to the private floor you came from."
+        : "The door down to the channels floor.",
+    spawn: {
+      x: DEMO_PORTAL_BOUNDS.x + DEMO_PORTAL_BOUNDS.w / 2,
+      z: DEMO_PORTAL_BOUNDS.z + 1.5,
+    },
+    door: {
+      x: DEMO_PORTAL_BOUNDS.x + DEMO_PORTAL_BOUNDS.w / 2,
+      z: DEMO_PORTAL_BOUNDS.z,
+    },
+    chat: false,
+  }));
+}
+
 /** The demo lives entirely in the browser: seeded data plus localStorage. */
 export const demoSource: OfficeSource = {
   mode: "demo",
@@ -320,7 +355,7 @@ export const demoSource: OfficeSource = {
     status: user.status,
     canVisit: true,
   })),
-  rooms: ROOMS as unknown as OfficeRoom[],
+  rooms: [...ROOMS, ...demoPortalRooms()] as unknown as OfficeRoom[],
   initialLayouts: withPersonalOfficeDefaults(
     ROOMS as unknown as OfficeRoom[],
     Object.fromEntries(
@@ -330,7 +365,7 @@ export const demoSource: OfficeSource = {
       ])
     )
   ),
-  initialMessages: {},
+  initialMessages: demoChatSeeds(),
   initialAvatar: DEFAULT_AVATAR,
 
   async loadLayouts() {
