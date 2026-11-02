@@ -219,6 +219,17 @@ export interface OfficeSource {
    * street must show what is already in it, not only what arrives next.
    */
   fetchMessages(roomId: string): Promise<OfficeChatMessage[]>;
+  /**
+   * The doors of the personal offices on a storey, as their owners set them.
+   * `onDoor` is called with each state that becomes known, including this
+   * user's own. Optional: a source without it shows every door open.
+   */
+  subscribeDoors?(
+    floorIndex: number,
+    onDoor: (roomId: string, open: boolean) => void
+  ): () => void;
+  /** The owner opens or shuts their own office door. */
+  setDoor?(roomId: string, open: boolean): Promise<void>;
   /** Messages other people post into a room while it is being read. */
   subscribeMessages(
     roomId: string,
@@ -235,4 +246,5 @@ export interface OfficeChatMessage {
   text: string;
   at: number;
   self?: boolean;
+  system?: boolean;
 }

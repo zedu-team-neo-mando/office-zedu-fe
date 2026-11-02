@@ -29,6 +29,7 @@ import type {
   OfficeZoeContext,
 } from "~/types/office";
 import { ROOMS } from "~/app/office/_components/office-data";
+import { entryErrorFromResponse } from "~/app/office/_components/office-entry";
 import {
   ownsPersonalOffice,
   personalOfficeTemplate,
@@ -197,6 +198,7 @@ function toOfficeMessage(
     text,
     at: Number.isNaN(at) ? Date.now() : at,
     self: row.user_id === selfId,
+    system: row.type === "system",
   };
 }
 
@@ -273,6 +275,27 @@ const AREA_FALLBACK_ROOM: OfficeRoom = {
 };
 
 /**
+ * A portal is a doorway, not a place to sit: it carries no chat and no
+ * presence, only the storey it joins. Bounds still come from the API.
+ */
+const PORTAL_FALLBACK_ROOM: OfficeRoom = {
+  id: "portal:0",
+  kind: "portal",
+  name: "Portal",
+  shortName: "Portal",
+  capacity: 0,
+  locked: false,
+  floorIndex: 0,
+  accent: "#a78bfa",
+  floor: "#241d39",
+  bounds: { x: 0, z: 0, w: 4, d: 4 },
+  description: "The door between the channels floor and the private floors.",
+  spawn: { x: 2, z: 1 },
+  door: { x: 2, z: 0 },
+  chat: false,
+};
+
+/**
  * The building's floor plan is fixed; the rooms inside it are real. Each real
  * room takes the next free slot of its kind, so the organisation's own
  * channels and people end up in the rooms a visitor would expect.
@@ -306,11 +329,16 @@ function buildRooms(
 
     const slot = available[index] ?? available[available.length - 1];
 
-    // The per-floor extras are not seeded scenes: the API owns their name and
-    // footprint, so they fall back to a neutral template and derive the walk-in
-    // point from the bounds the server sends.
+    // The per-floor extras and the portals are not seeded scenes: the API owns
+    // their name and footprint, so they fall back to a neutral template and
+    // derive the walk-in point from the bounds the server sends.
     const template =
-      slot ?? (room.kind === "area" ? { ...AREA_FALLBACK_ROOM } : undefined);
+      slot ??
+      (room.kind === "area"
+        ? { ...AREA_FALLBACK_ROOM }
+        : room.kind === "portal"
+          ? { ...PORTAL_FALLBACK_ROOM }
+          : undefined);
     if (!template) continue;
 
     // Bounds come from the API (source of truth), in two dimensions. Convert
@@ -326,11 +354,21 @@ function buildRooms(
 
     // The server lays the rooms out, so the walk-in point follows every
     // footprint. The demo's static spawns only make sense on the demo plan.
-    const spawn = {
-      x: bounds.x + bounds.w / 2,
-      z: bounds.z + bounds.d - Math.min(1.6, bounds.d * 0.35),
-    };
-    const door = { x: bounds.x + bounds.w / 2, z: bounds.z + bounds.d };
+    // A portal opens north, towards the floor it serves; every other room opens
+    // south, onto its corridor.
+    const isPortal = room.kind === "portal";
+    const spawn = isPortal
+      ? {
+          x: bounds.x + bounds.w / 2,
+          z: bounds.z + Math.min(1.8, bounds.d * 0.35),
+        }
+      : {
+          x: bounds.x + bounds.w / 2,
+          z: bounds.z + bounds.d - Math.min(1.6, bounds.d * 0.35),
+        };
+    const door = isPortal
+      ? { x: bounds.x + bounds.w / 2, z: bounds.z }
+      : { x: bounds.x + bounds.w / 2, z: bounds.z + bounds.d };
 
     rooms.push({
       ...template,
@@ -399,6 +437,16 @@ export class LiveOfficeSource implements OfficeSource {
   /** The room presence subscription that is open right now, if any. */
   private presenceSubscription: any = null;
   private presenceRoomId: string | null = null;
+  /** Live door channels, by floor, so the owner's change reaches each one. */
+  private doorSubscriptions = new Map<number, any>();
+  /** Everyone listening for doors in this tab, so a change shows at once. */
+  private doorListeners = new Set<(roomId: string, open: boolean) => void>();
+  /**
+   * The rooms the server has admitted this user to. Entry requests for two
+   * rooms can overlap, so each room's admission is kept on its own: a late
+   * answer for one room never clears another.
+   */
+  private admittedRooms = new Set<string>();
   private lastPose: {
     roomId: string;
     x: number;
@@ -643,22 +691,31 @@ export class LiveOfficeSource implements OfficeSource {
     throw new Error("Zoe could not answer that right now.");
   }
 
+  /**
+   * Asks the server to let this user into a room. The server owns the
+   * decision, so nothing is published to the room until it says yes: a
+   * refused visitor (a full Focus pod, a locked office) is never announced as
+   * standing inside, and the refusal is thrown for the office to act on.
+   */
   async enterRoom(roomId: string) {
-    this.publishOverSocket(roomId, "join");
-    try {
-      unwrap(
-        await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/enter`, {}),
-        "The room could not be entered."
-      );
-    } catch {
-      // Presence also travels over the room's realtime channel, so a refused
-      // entry must not stop this avatar from being published to the room.
+    // The silent helper hands the refusal back instead of toasting it, so the
+    // office can say once, in its own words, why the door stayed shut.
+    const response = await BuzzRequest(
+      `/office/rooms/${encodeRoomId(roomId)}/enter`,
+      {}
+    );
+    const refusal = entryErrorFromResponse(response, roomId);
+    if (refusal) {
+      this.admittedRooms.delete(roomId);
+      throw refusal;
     }
+    this.admittedRooms.add(roomId);
     this.publishOverSocket(roomId, "join");
   }
 
   async leaveRoom(roomId: string) {
     this.publishOverSocket(roomId, "leave");
+    this.admittedRooms.delete(roomId);
     unwrap(
       await PostRequest(`/office/rooms/${encodeRoomId(roomId)}/leave`, {}),
       "The room could not be left."
@@ -692,7 +749,9 @@ export class LiveOfficeSource implements OfficeSource {
 
   /**
    * Publishes this user's presence on the room channel the client is
-   * subscribed to. Returns false when that room's subscription is not live.
+   * subscribed to. Returns false when that room's subscription is not live,
+   * or when the server has not admitted this user to the room: being able to
+   * read a room's roster is not the same as standing in it.
    */
   private publishOverSocket(
     roomId: string,
@@ -700,6 +759,7 @@ export class LiveOfficeSource implements OfficeSource {
   ): boolean {
     const subscription = this.presenceSubscription;
     if (
+      !this.admittedRooms.has(roomId) ||
       !subscription ||
       this.presenceRoomId !== roomId ||
       subscription.state !== "subscribed"
@@ -893,6 +953,9 @@ export class LiveOfficeSource implements OfficeSource {
       // read the room again: it holds everyone the stream did not carry.
       onState?.("live");
       resync();
+      // Only a reconnect re-announces this avatar; a first subscription is
+      // still waiting on the server to admit it, and publishOverSocket stays
+      // quiet until then.
       this.publishOverSocket(roomId, "join");
       subscription
         .publish({ type: "query", roomId, senderId: this.userId })
@@ -923,6 +986,153 @@ export class LiveOfficeSource implements OfficeSource {
       releaseChannelSubscription(client, channel, subscription);
       // The roster dies with the subscription it belongs to, so the next room
       // starts from its own snapshot instead of inheriting this one.
+    };
+  }
+
+  private doorKey(roomId: string) {
+    return `office_door_${this.orgId}_${roomId}`;
+  }
+
+  /** The owner's own door state, remembered in this browser. */
+  private readOwnDoor(roomId: string): boolean | null {
+    try {
+      const stored = localStorage.getItem(this.doorKey(roomId));
+      return stored === "closed" ? false : stored === "open" ? true : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The offices this user owns on a storey. */
+  private ownOfficesOn(floorIndex: number) {
+    return this.rooms.filter(
+      (room) =>
+        (room.floorIndex ?? 0) === floorIndex &&
+        ownsPersonalOffice(room, this.userId)
+    );
+  }
+
+  /**
+   * The storey's shared room (reception, lobby or open area), whose channel
+   * everyone on the floor can hear. Door changes travel on it because people
+   * in the corridor are not subscribed to the office they are looking at.
+   */
+  private floorCommonRoomId(floorIndex: number): string | null {
+    const onFloor = this.rooms.filter(
+      (room) => (room.floorIndex ?? 0) === floorIndex
+    );
+    const common =
+      onFloor.find((room) => room.kind === "reception") ??
+      onFloor.find((room) => room.kind === "lobby") ??
+      onFloor.find((room) => room.kind === "area") ??
+      onFloor[0];
+    return common?.id ?? null;
+  }
+
+  private publishDoor(subscription: any, roomId: string, open: boolean) {
+    if (subscription?.state !== "subscribed") return;
+    subscription
+      .publish({
+        type: "office_door",
+        roomId,
+        open,
+        senderId: this.userId,
+        at: new Date().toISOString(),
+      })
+      .catch(() => {
+        // The next change or query carries the state again.
+      });
+  }
+
+  async setDoor(roomId: string, open: boolean) {
+    const room = this.rooms.find((candidate) => candidate.id === roomId);
+    if (!room || !ownsPersonalOffice(room, this.userId)) {
+      throw new Error("Only the owner can open or close this door.");
+    }
+    try {
+      localStorage.setItem(this.doorKey(roomId), open ? "open" : "closed");
+    } catch {
+      // Private browsing: the door still changes for this visit.
+    }
+    for (const listener of this.doorListeners) listener(roomId, open);
+    this.publishDoor(
+      this.doorSubscriptions.get(room.floorIndex ?? 0),
+      roomId,
+      open
+    );
+  }
+
+  subscribeDoors(
+    floorIndex: number,
+    onDoor: (roomId: string, open: boolean) => void
+  ): () => void {
+    // This user's own doors are known straight away, whatever the network.
+    for (const room of this.ownOfficesOn(floorIndex)) {
+      const open = this.readOwnDoor(room.id);
+      if (open !== null) onDoor(room.id, open);
+    }
+    const local = (roomId: string, open: boolean) => {
+      const room = this.rooms.find((candidate) => candidate.id === roomId);
+      if ((room?.floorIndex ?? 0) === floorIndex) onDoor(roomId, open);
+    };
+    this.doorListeners.add(local);
+
+    const commonRoomId = this.floorCommonRoomId(floorIndex);
+    if (!commonRoomId) {
+      return () => {
+        this.doorListeners.delete(local);
+      };
+    }
+
+    const client = getSharedCentrifuge();
+    const channel = presenceChannel(this.orgId, floorIndex, commonRoomId);
+    const subscription = prepareChannelSubscription(client, channel, {
+      getToken: () => getSubscriptionToken(channel),
+    });
+    this.doorSubscriptions.set(floorIndex, subscription);
+
+    const announceOwn = () => {
+      for (const room of this.ownOfficesOn(floorIndex)) {
+        const open = this.readOwnDoor(room.id);
+        if (open !== null) this.publishDoor(subscription, room.id, open);
+      }
+    };
+
+    const onPublication = (ctx: any) => {
+      const data = ctx?.data;
+      if (data?.type === "office_door_query") {
+        if (data.senderId !== this.userId) announceOwn();
+        return;
+      }
+      if (data?.type !== "office_door" || typeof data.roomId !== "string")
+        return;
+      // Only the owner's word counts. Centrifugo names the publisher when it
+      // can; otherwise the sender id inside the message is all there is.
+      const sender = String(ctx?.info?.user ?? data.senderId ?? "");
+      const room = this.rooms.find((candidate) => candidate.id === data.roomId);
+      if (!room || !sender || !ownsPersonalOffice(room, sender)) return;
+      onDoor(room.id, Boolean(data.open));
+    };
+    const onSubscribed = () => {
+      announceOwn();
+      subscription
+        .publish({ type: "office_door_query", senderId: this.userId })
+        .catch(() => {});
+    };
+
+    subscription.on("publication", onPublication);
+    subscription.on("subscribed", onSubscribed);
+    if (subscription.state === "subscribed") onSubscribed();
+    subscription.subscribe();
+
+    return () => {
+      this.doorListeners.delete(local);
+      if (this.doorSubscriptions.get(floorIndex) === subscription) {
+        this.doorSubscriptions.delete(floorIndex);
+      }
+      subscription.off("publication", onPublication);
+      subscription.off("subscribed", onSubscribed);
+      releaseChannelSubscription(client, channel, subscription);
     };
   }
 
