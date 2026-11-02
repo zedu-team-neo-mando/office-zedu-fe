@@ -275,6 +275,27 @@ const AREA_FALLBACK_ROOM: OfficeRoom = {
 };
 
 /**
+ * A portal is a doorway, not a place to sit: it carries no chat and no
+ * presence, only the storey it joins. Bounds still come from the API.
+ */
+const PORTAL_FALLBACK_ROOM: OfficeRoom = {
+  id: "portal:0",
+  kind: "portal",
+  name: "Portal",
+  shortName: "Portal",
+  capacity: 0,
+  locked: false,
+  floorIndex: 0,
+  accent: "#a78bfa",
+  floor: "#241d39",
+  bounds: { x: 0, z: 0, w: 4, d: 4 },
+  description: "The door between the channels floor and the private floors.",
+  spawn: { x: 2, z: 1 },
+  door: { x: 2, z: 0 },
+  chat: false,
+};
+
+/**
  * The building's floor plan is fixed; the rooms inside it are real. Each real
  * room takes the next free slot of its kind, so the organisation's own
  * channels and people end up in the rooms a visitor would expect.
@@ -308,11 +329,16 @@ function buildRooms(
 
     const slot = available[index] ?? available[available.length - 1];
 
-    // The per-floor extras are not seeded scenes: the API owns their name and
-    // footprint, so they fall back to a neutral template and derive the walk-in
-    // point from the bounds the server sends.
+    // The per-floor extras and the portals are not seeded scenes: the API owns
+    // their name and footprint, so they fall back to a neutral template and
+    // derive the walk-in point from the bounds the server sends.
     const template =
-      slot ?? (room.kind === "area" ? { ...AREA_FALLBACK_ROOM } : undefined);
+      slot ??
+      (room.kind === "area"
+        ? { ...AREA_FALLBACK_ROOM }
+        : room.kind === "portal"
+          ? { ...PORTAL_FALLBACK_ROOM }
+          : undefined);
     if (!template) continue;
 
     // Bounds come from the API (source of truth), in two dimensions. Convert
@@ -328,11 +354,21 @@ function buildRooms(
 
     // The server lays the rooms out, so the walk-in point follows every
     // footprint. The demo's static spawns only make sense on the demo plan.
-    const spawn = {
-      x: bounds.x + bounds.w / 2,
-      z: bounds.z + bounds.d - Math.min(1.6, bounds.d * 0.35),
-    };
-    const door = { x: bounds.x + bounds.w / 2, z: bounds.z + bounds.d };
+    // A portal opens north, towards the floor it serves; every other room opens
+    // south, onto its corridor.
+    const isPortal = room.kind === "portal";
+    const spawn = isPortal
+      ? {
+          x: bounds.x + bounds.w / 2,
+          z: bounds.z + Math.min(1.8, bounds.d * 0.35),
+        }
+      : {
+          x: bounds.x + bounds.w / 2,
+          z: bounds.z + bounds.d - Math.min(1.6, bounds.d * 0.35),
+        };
+    const door = isPortal
+      ? { x: bounds.x + bounds.w / 2, z: bounds.z }
+      : { x: bounds.x + bounds.w / 2, z: bounds.z + bounds.d };
 
     rooms.push({
       ...template,
