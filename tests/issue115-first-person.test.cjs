@@ -37,6 +37,39 @@ function load(file) {
 }
 const { OfficeEngine } = load("engine/OfficeEngine.ts");
 
+function sourceAst(file) {
+  return ts.createSourceFile(
+    file,
+    fs.readFileSync(path.join(folder, file), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX
+  );
+}
+
+function functionSource(ast, name) {
+  let found = null;
+  function visit(node) {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === name) {
+      found = node;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert.ok(found, `${name} must exist`);
+  return found.getText(ast);
+}
+
+function compileFunction(source, parameters) {
+  const code = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText;
+  return new Function(
+    ...parameters,
+    code + `; return ${source.match(/function (\w+)/)[1]};`
+  );
+}
+
 function harness() {
   const engine = Object.create(OfficeEngine.prototype);
   engine.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 240);
@@ -202,6 +235,39 @@ test("Pointer-lock changes still report the mouse-look state", () => {
   }
 
   assert.deepEqual(notifications, [true, false]);
+});
+
+test("Mobile cannot enter first person with V, but can still leave it", () => {
+  const createToggle = compileFunction(
+    functionSource(sourceAst("OfficeDemo.tsx"), "toggleFirstPerson"),
+    ["stateRef", "setFirstPersonView"]
+  );
+  const calls = [];
+  const stateRef = {
+    current: {
+      isMobile: true,
+      firstPerson: false,
+      chatOpen: false,
+      editorActive: false,
+      towerOpen: false,
+      zoeOpen: false,
+      directoryOpen: false,
+      onboardingOpen: false,
+    },
+  };
+  const toggle = createToggle(stateRef, (next) => calls.push(next));
+
+  toggle();
+  assert.deepEqual(calls, [], "mobile must not enter first person");
+
+  stateRef.current.firstPerson = true;
+  toggle();
+  assert.deepEqual(calls, [false], "mobile must still be able to leave");
+
+  stateRef.current.isMobile = false;
+  stateRef.current.firstPerson = false;
+  toggle();
+  assert.deepEqual(calls, [false, true], "desktop still enters");
 });
 
 test("Walls stop fading away once the eye is the camera", () => {

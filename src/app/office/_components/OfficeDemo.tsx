@@ -1313,6 +1313,9 @@ export default function OfficeDemo({
 
   function toggleFirstPerson() {
     const state = stateRef.current;
+    // The eye button is hidden on mobile, so V must not open the desktop view.
+    // Keep the exit path available if first person is already active.
+    if (state.isMobile && !state.firstPerson) return;
     // A panel needs the pointer; capturing it behind one traps the cursor.
     if (
       state.chatOpen ||
