@@ -214,6 +214,27 @@ export function demoTowerOffices(
 const DEMO_CHANNEL_NAME = "zedu_office_demo_multiplayer";
 
 let demoBroadcastChannel: BroadcastChannel | null = null;
+const DEMO_DOORS_KEY = "office_demo_doors";
+const demoDoorListeners = new Set<(roomId: string, open: boolean) => void>();
+
+function readDemoDoors(): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DEMO_DOORS_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDemoDoors(doors: Record<string, boolean>) {
+  try {
+    localStorage.setItem(DEMO_DOORS_KEY, JSON.stringify(doors));
+  } catch {
+    // Private browsing: the door still changes in this tab.
+  }
+}
+
 function getDemoChannel(): BroadcastChannel | null {
   if (
     typeof window === "undefined" ||
@@ -283,6 +304,41 @@ let latestLocalPose: {
   yaw: number;
 } | null = null;
 
+/**
+ * The demo's portal sits at the south end of the private-wing corridor, in the
+ * same place on every storey, so it reads as a shaft rather than a new wing.
+ * Floors 3 to 9 are directory-only in the demo and have no plan to walk.
+ */
+const DEMO_PORTAL_BOUNDS = { x: 44, z: 30.8, w: 4.2, d: 4.4 };
+
+function demoPortalRooms(): OfficeRoom[] {
+  return [0, 1, 2].map((floorIndex) => ({
+    id: `portal:${floorIndex}`,
+    kind: "portal" as const,
+    name: floorIndex === 0 ? "Private floors" : "Channels",
+    shortName: floorIndex === 0 ? "Private floors" : "Channels",
+    capacity: 0,
+    locked: false,
+    floorIndex,
+    accent: "#a78bfa",
+    floor: "#241d39",
+    bounds: DEMO_PORTAL_BOUNDS,
+    description:
+      floorIndex === 0
+        ? "The door back to the private floor you came from."
+        : "The door down to the channels floor.",
+    spawn: {
+      x: DEMO_PORTAL_BOUNDS.x + DEMO_PORTAL_BOUNDS.w / 2,
+      z: DEMO_PORTAL_BOUNDS.z + 1.5,
+    },
+    door: {
+      x: DEMO_PORTAL_BOUNDS.x + DEMO_PORTAL_BOUNDS.w / 2,
+      z: DEMO_PORTAL_BOUNDS.z,
+    },
+    chat: false,
+  }));
+}
+
 /** The demo lives entirely in the browser: seeded data plus localStorage. */
 export const demoSource: OfficeSource = {
   mode: "demo",
@@ -299,7 +355,7 @@ export const demoSource: OfficeSource = {
     status: user.status,
     canVisit: true,
   })),
-  rooms: ROOMS as unknown as OfficeRoom[],
+  rooms: [...ROOMS, ...demoPortalRooms()] as unknown as OfficeRoom[],
   initialLayouts: withPersonalOfficeDefaults(
     ROOMS as unknown as OfficeRoom[],
     Object.fromEntries(
@@ -309,7 +365,7 @@ export const demoSource: OfficeSource = {
       ])
     )
   ),
-  initialMessages: {},
+  initialMessages: demoChatSeeds(),
   initialAvatar: DEFAULT_AVATAR,
 
   async loadLayouts() {
@@ -479,6 +535,37 @@ export const demoSource: OfficeSource = {
     if (!roomMap) return [];
     const identity = getDemoIdentity();
     return [...roomMap.values()].filter((occ) => occ.userId !== identity.id);
+  },
+
+  async setDoor(roomId: string, open: boolean) {
+    const doors = readDemoDoors();
+    doors[roomId] = open;
+    writeDemoDoors(doors);
+    for (const listener of demoDoorListeners) listener(roomId, open);
+    getDemoChannel()?.postMessage({ type: "office_door", roomId, open });
+  },
+
+  subscribeDoors(
+    _floorIndex: number,
+    onDoor: (roomId: string, open: boolean) => void
+  ) {
+    // The demo keeps its doors in this browser, so every tab agrees on them.
+    for (const [roomId, open] of Object.entries(readDemoDoors())) {
+      onDoor(roomId, open);
+    }
+    demoDoorListeners.add(onDoor);
+    const channel = getDemoChannel();
+    const handler = (event: MessageEvent) => {
+      const data = event.data;
+      if (data?.type === "office_door" && typeof data.roomId === "string") {
+        onDoor(data.roomId, Boolean(data.open));
+      }
+    };
+    channel?.addEventListener("message", handler);
+    return () => {
+      demoDoorListeners.delete(onDoor);
+      channel?.removeEventListener("message", handler);
+    };
   },
 
   subscribePresence(
