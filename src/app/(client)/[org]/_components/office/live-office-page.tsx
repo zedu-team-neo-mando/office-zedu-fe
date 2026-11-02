@@ -144,7 +144,7 @@ export default function LiveOfficePage() {
       self={{
         id: userId,
         name: state?.user?.username ?? "You",
-        role: state?.orgData?.name ?? "",
+        role: state?.user?.title || state?.orgData?.user_role?.role_name || "",
       }}
       onExit={() => router.push(`/${orgSlug}`)}
     />

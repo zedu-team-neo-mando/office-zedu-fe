@@ -253,6 +253,8 @@ test("Mobile cannot enter first person with V, but can still leave it", () => {
       zoeOpen: false,
       directoryOpen: false,
       onboardingOpen: false,
+      avatarOpen: false,
+      tourStep: null,
     },
   };
   const toggle = createToggle(stateRef, (next) => calls.push(next));
@@ -268,11 +270,35 @@ test("Mobile cannot enter first person with V, but can still leave it", () => {
   stateRef.current.firstPerson = false;
   toggle();
   assert.deepEqual(calls, [false, true], "desktop still enters");
+
+  stateRef.current.avatarOpen = true;
+  toggle();
+  assert.deepEqual(calls, [false, true], "avatar dialog blocks the toggle");
+
+  stateRef.current.avatarOpen = false;
+  stateRef.current.tourStep = 0;
+  toggle();
+  assert.deepEqual(calls, [false, true], "tour blocks the toggle");
+
+  stateRef.current.tourStep = null;
+  toggle();
+  assert.deepEqual(calls, [false, true, true], "desktop can enter again");
+});
+
+test("First person falls back to drag look without pointer lock", () => {
+  const engine = harness();
+  engine.renderer = { domElement: {} };
+
+  assert.doesNotThrow(() => engine.setFirstPerson(true));
+  assert.equal(engine.firstPerson, true);
 });
 
 test("Walls stop fading away once the eye is the camera", () => {
   const engine = harness();
-  const material = new THREE.MeshBasicMaterial();
+  const material = new THREE.MeshBasicMaterial({
+    opacity: 0.35,
+    transparent: true,
+  });
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
   engine.occlusionWalls = [
     {
@@ -286,7 +312,9 @@ test("Walls stop fading away once the eye is the camera", () => {
   ];
   engine.setFirstPerson(true);
   engine.updateCamera(0.016);
-  engine.updateWallOcclusion(0.016);
+  for (let frame = 0; frame < 40; frame += 1) {
+    engine.updateWallOcclusion(0.016);
+  }
 
   assert.ok(material.opacity > 0.99, `opacity was ${material.opacity}`);
 });

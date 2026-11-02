@@ -366,7 +366,7 @@ export default function Hud({
             <span className="mx-1 h-3 w-px bg-white/10" />
             <span className="office-kbd">Shift</span> run
             <span className="mx-1 h-3 w-px bg-white/10" />
-            click floor to walk
+            {firstPerson ? "click to look" : "click floor to walk"}
             <span className="mx-1 h-3 w-px bg-white/10" />
             <span className="office-kbd">B</span> furnish
           </div>
@@ -540,6 +540,9 @@ export function Minimap({
                 stroke={active ? "#ffffff" : full ? "#fb7185" : room.accent}
                 strokeOpacity={active ? 0.85 : full ? 0.7 : 0.38}
                 strokeWidth={active ? 0.28 : 0.16}
+                strokeDasharray={
+                  room.kind === "portal" ? "0.55 0.35" : undefined
+                }
                 className="office-minimap-room"
                 onClick={() => onNavigate(room.id)}
               >
@@ -560,7 +563,8 @@ export function Minimap({
               )}
               {(room.kind === "channel" ||
                 room.kind === "lounge" ||
-                room.kind === "reception") && (
+                room.kind === "reception" ||
+                room.kind === "portal") && (
                 <text
                   x={room.bounds.x + room.bounds.w / 2}
                   y={room.bounds.z + room.bounds.d / 2 + 0.5}

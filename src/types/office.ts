@@ -246,4 +246,5 @@ export interface OfficeChatMessage {
   text: string;
   at: number;
   self?: boolean;
+  system?: boolean;
 }
