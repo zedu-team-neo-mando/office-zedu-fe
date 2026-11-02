@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
+  DoorClosed,
   Building2,
   ChevronDown,
   ChevronUp,
@@ -59,11 +60,16 @@ interface HudProps {
   selfName: string;
   selfRole: string;
   nearZoe: boolean;
+  /** The personal-office door the player is standing at, if any. */
+  door?: { name: string; open: boolean; own: boolean } | null;
+  onToggleDoor?: () => void;
   unread: number;
   chatOpen: boolean;
   editorOpen: boolean;
   isMobile: boolean;
   mapOpen: boolean;
+  /** Rooms known to be at capacity, such as an occupied Focus pod. */
+  fullRoomIds?: ReadonlySet<string>;
   onToggleMap: () => void;
   onOpenDirectory: () => void;
   onOpenAvatar: () => void;
@@ -96,11 +102,14 @@ export default function Hud({
   selfName,
   selfRole,
   nearZoe,
+  door,
+  onToggleDoor,
   unread,
   chatOpen,
   editorOpen,
   isMobile,
   mapOpen,
+  fullRoomIds,
   onToggleMap,
   onOpenDirectory,
   onOpenAvatar,
@@ -260,6 +269,7 @@ export default function Hud({
         currentRoomId={currentRoomId}
         player={player}
         presence={presence}
+        fullRoomIds={fullRoomIds}
         isMobile={isMobile}
         onNavigate={onNavigate}
       />
@@ -288,6 +298,40 @@ export default function Hud({
               </span>
               Talk
             </button>
+          </div>
+        ) : door && (door.own || !door.open) ? (
+          <div className="office-glass pointer-events-auto mx-auto flex w-fit items-center gap-3 rounded-2xl px-4 py-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/8 text-[#c4b5fd]">
+              {door.open ? (
+                <DoorOpen className="h-4.5 w-4.5" />
+              ) : (
+                <DoorClosed className="h-4.5 w-4.5" />
+              )}
+            </span>
+            <div>
+              <p className="text-[0.72rem] font-extrabold uppercase tracking-[0.16em] text-[#c4b5fd]">
+                {door.own ? "Your door" : door.name}
+              </p>
+              <p className="text-[0.78rem] font-semibold text-[#d8dced]">
+                {door.own
+                  ? door.open
+                    ? "Open · visitors can walk in"
+                    : "Shut · visitors stay outside"
+                  : "Door shut · say hello in the conversation"}
+              </p>
+            </div>
+            {door.own && (
+              <button
+                type="button"
+                className="office-button-primary !h-10 !rounded-xl !px-3.5 !text-[0.78rem]"
+                onClick={onToggleDoor}
+              >
+                <span className="office-kbd !border-white/20 !bg-white/10">
+                  E
+                </span>
+                {door.open ? "Close door" : "Open door"}
+              </button>
+            )}
           </div>
         ) : editorOpen ? (
           <div className="office-glass mx-auto flex w-fit items-center gap-3 rounded-2xl px-4 py-2 text-[0.72rem] font-semibold text-[#b9c1d6]">
@@ -364,6 +408,7 @@ export function RepositionableMap({
   currentRoomId,
   player,
   presence,
+  fullRoomIds,
   isMobile,
   onNavigate,
 }: {
@@ -373,6 +418,7 @@ export function RepositionableMap({
   currentRoomId: string | null;
   player: { x: number; z: number; yaw: number };
   presence: PresencePoint[];
+  fullRoomIds?: ReadonlySet<string>;
   isMobile: boolean;
   onNavigate: (roomId: string) => void;
 }) {
@@ -585,6 +631,7 @@ export function RepositionableMap({
           currentRoomId={currentRoomId}
           player={player}
           presence={presence}
+          fullRoomIds={fullRoomIds}
           onNavigate={onNavigate}
           onClose={onToggleMap}
           compact={isMobile}
@@ -614,6 +661,7 @@ export function Minimap({
   currentRoomId,
   player,
   presence,
+  fullRoomIds,
   onNavigate,
   onClose,
   compact = false,
@@ -628,6 +676,7 @@ export function Minimap({
   currentRoomId: string | null;
   player: { x: number; z: number; yaw: number };
   presence: PresencePoint[];
+  fullRoomIds?: ReadonlySet<string>;
   onNavigate: (roomId: string) => void;
   onClose: () => void;
   compact?: boolean;
@@ -739,6 +788,7 @@ export function Minimap({
         />
         {rooms.map((room) => {
           const active = room.id === currentRoomId;
+          const full = !active && Boolean(fullRoomIds?.has(room.id));
           return (
             <g key={room.id}>
               <rect
@@ -747,19 +797,36 @@ export function Minimap({
                 width={room.bounds.w}
                 height={room.bounds.d}
                 rx="0.55"
-                fill={room.accent}
-                fillOpacity={active ? 0.42 : 0.14}
-                stroke={active ? "#ffffff" : room.accent}
-                strokeOpacity={active ? 0.85 : 0.38}
+                fill={full ? "#f43f5e" : room.accent}
+                fillOpacity={active ? 0.42 : full ? 0.2 : 0.14}
+                stroke={active ? "#ffffff" : full ? "#fb7185" : room.accent}
+                strokeOpacity={active ? 0.85 : full ? 0.7 : 0.38}
                 strokeWidth={active ? 0.28 : 0.16}
+                strokeDasharray={
+                  room.kind === "portal" ? "0.55 0.35" : undefined
+                }
                 className="office-minimap-room"
                 onClick={() => onNavigate(room.id)}
               >
-                <title>{room.name}</title>
+                <title>{full ? `${room.name} · Full` : room.name}</title>
               </rect>
+              {full && (
+                <text
+                  x={room.bounds.x + room.bounds.w / 2}
+                  y={room.bounds.z + room.bounds.d / 2 + 0.45}
+                  textAnchor="middle"
+                  fontSize="1.25"
+                  fontWeight="800"
+                  fill="#fb7185"
+                  pointerEvents="none"
+                >
+                  FULL
+                </text>
+              )}
               {(room.kind === "channel" ||
                 room.kind === "lounge" ||
-                room.kind === "reception") && (
+                room.kind === "reception" ||
+                room.kind === "portal") && (
                 <text
                   x={room.bounds.x + room.bounds.w / 2}
                   y={room.bounds.z + room.bounds.d / 2 + 0.5}

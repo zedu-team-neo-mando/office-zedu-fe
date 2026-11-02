@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { OfficeEntryError } from "./office-entry";
 import type {
   OfficeOccupant,
   OfficePresenceState,
@@ -11,6 +12,10 @@ import type {
 const TICK_MS = 200;
 /** A refused attempt waits this long before trying again. */
 const BACKOFF_MS = 1000;
+/** The first wait before retrying an entry that got no answer at all. */
+const ENTRY_RETRY_MS = 3000;
+/** Retries back off to at most this. */
+const ENTRY_RETRY_MAX_MS = 30_000;
 /** A still avatar still reports in, so a room can expire a quiet one. */
 const HEARTBEAT_MS = 30_000;
 
@@ -26,6 +31,14 @@ interface UseOfficePresenceOptions {
   onOccupants: (occupants: OfficeOccupant[]) => void;
   /** Whether the room's realtime roster is connected yet. */
   onState?: (state: OfficePresenceState) => void;
+  /**
+   * The server refused entry to the room the player is standing in, for
+   * example because a Focus pod is already full. Nothing about the player is
+   * published to that room; the caller decides where to put them instead.
+   */
+  onEntryRejected?: (roomId: string, error: unknown) => void;
+  /** The server let the player into the room they are standing in. */
+  onEntered?: (roomId: string) => void;
 }
 
 /**
@@ -45,11 +58,16 @@ export function useOfficePresence({
   pose,
   onOccupants,
   onState,
+  onEntryRejected,
+  onEntered,
 }: UseOfficePresenceOptions) {
   /** The room whose subscription is live right now, if any. */
   const [liveRoom, setLiveRoom] = useState<string | null>(null);
   /** The room the server was told the player is standing in, if any. */
   const [enteredRoom, setEnteredRoom] = useState<string | null>(null);
+  /** Bumped to try entry again after a request that got no answer. */
+  const [entryRetry, setEntryRetry] = useState(0);
+  const entryRetryDelayRef = useRef(ENTRY_RETRY_MS);
 
   // Callbacks and the pose change on every frame the engine reports, while the
   // effects below only belong to a room. Refs keep the newest value reachable
@@ -58,6 +76,10 @@ export function useOfficePresence({
   onOccupantsRef.current = onOccupants;
   const onStateRef = useRef(onState);
   onStateRef.current = onState;
+  const onEntryRejectedRef = useRef(onEntryRejected);
+  onEntryRejectedRef.current = onEntryRejected;
+  const onEnteredRef = useRef(onEntered);
+  onEnteredRef.current = onEntered;
   const poseRef = useRef(pose);
   poseRef.current = pose;
 
@@ -104,8 +126,9 @@ export function useOfficePresence({
 
   // The room is entered only once its own subscription is live, so entry is
   // sequenced with the stream that reports who is inside it, and it is
-  // attempted at most once per live stretch. The request helper reports a
-  // failure on its own; it is not toasted again here.
+  // attempted at most once per live stretch. A refusal is not an entry: the
+  // room is not marked as entered, so nothing is published as an occupant,
+  // and the caller is told so it can move the player back out.
   useEffect(() => {
     if (!active || !roomId || liveRoom !== roomId) return;
     if (enteredRoomRef.current === roomId || enterAttemptRef.current === roomId)
@@ -113,13 +136,16 @@ export function useOfficePresence({
 
     enterAttemptRef.current = roomId;
     let cancelled = false;
+    let retryTimer: number | undefined;
 
     source
       .enterRoom(roomId)
       .then(() => {
         if (!cancelled) {
           enteredRoomRef.current = roomId;
+          entryRetryDelayRef.current = ENTRY_RETRY_MS;
           setEnteredRoom(roomId);
+          onEnteredRef.current?.(roomId);
           return;
         }
         // The player moved on while entry was still in flight, so the server
@@ -128,14 +154,31 @@ export function useOfficePresence({
           // The request helper already reported the failure.
         });
       })
-      .catch(() => {
-        if (!cancelled) enterAttemptRef.current = null;
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        enterAttemptRef.current = null;
+        // A request that got no answer (offline, timed out) did not decide
+        // anything, so it is tried again with a growing wait instead of
+        // leaving the player in a room the server never admitted them to.
+        const definite =
+          error instanceof OfficeEntryError && typeof error.status === "number";
+        if (!definite) {
+          const delay = entryRetryDelayRef.current;
+          entryRetryDelayRef.current = Math.min(delay * 2, ENTRY_RETRY_MAX_MS);
+          retryTimer = window.setTimeout(
+            () => setEntryRetry((value) => value + 1),
+            delay
+          );
+          return;
+        }
+        onEntryRejectedRef.current?.(roomId, error);
       });
 
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [source, active, roomId, liveRoom]);
+  }, [source, active, roomId, liveRoom, entryRetry]);
 
   // Only a room that was actually entered is ever left.
   useEffect(() => {
@@ -145,6 +188,7 @@ export function useOfficePresence({
       const entered = enteredRoomRef.current;
       enteredRoomRef.current = null;
       enterAttemptRef.current = null;
+      entryRetryDelayRef.current = ENTRY_RETRY_MS;
       setEnteredRoom(null);
       if (!entered) return;
       source.leaveRoom(entered).catch(() => {
