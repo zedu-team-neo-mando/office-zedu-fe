@@ -1,0 +1,433 @@
+import {
+  CATALOG_BY_ID,
+  furnitureAabb,
+  type FurnitureItem,
+  type OfficeRoom,
+  validatePlacement,
+} from "./office-data";
+
+/** A starter piece, before it becomes a layout item. */
+interface TemplatePiece {
+  /** Item id suffix, so an office's ids are stable and unique to it. */
+  key: string;
+  catalogId: string;
+  x: number;
+  z: number;
+  rotation: FurnitureItem["rotation"];
+}
+
+/** Two decimals is enough for a layout, and keeps the payload readable. */
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+type Rotation = FurnitureItem["rotation"];
+
+/** The way each rotation faces on the floor: 0 looks along +z, 90 along +x. */
+const DIRECTION: Record<Rotation, { x: number; z: number }> = {
+  0: { x: 0, z: 1 },
+  90: { x: 1, z: 0 },
+  180: { x: 0, z: -1 },
+  270: { x: -1, z: 0 },
+};
+
+function oppositeRotation(rotation: Rotation): Rotation {
+  return ((rotation + 180) % 360) as Rotation;
+}
+
+/**
+ * The rotation that looks from the middle of the room toward its door, which
+ * sits on one of the four walls. A door that cannot be placed on a wall falls
+ * back to the +z wall, the side the live offices use.
+ */
+function rotationTowardDoor(room: OfficeRoom): Rotation {
+  const { bounds: b, door } = room;
+  const walls: Array<[Rotation, number]> = [
+    [0, Math.abs(door.z - (b.z + b.d))],
+    [90, Math.abs(door.x - (b.x + b.w))],
+    [180, Math.abs(door.z - b.z)],
+    [270, Math.abs(door.x - b.x)],
+  ];
+  return walls.reduce((best, wall) => (wall[1] < best[1] ? wall : best))[0];
+}
+
+export function roomContains(room: OfficeRoom, x: number, z: number): boolean {
+  const b = room.bounds;
+  return x >= b.x && x <= b.x + b.w && z >= b.z && z <= b.z + b.d;
+}
+
+/**
+ * Whether a room is somebody's own office. Only the owner may change its
+ * furniture; everybody else visits it read-only.
+ */
+export function ownsPersonalOffice(room: OfficeRoom, userId: string): boolean {
+  return (
+    room.kind === "personal" &&
+    Boolean(userId) &&
+    (room.ownerId === userId || room.id === `personal:${userId}`)
+  );
+}
+
+/**
+ * The furniture a personal office starts with.
+ *
+ * The desk stands out in the room on its own rug. The owner's chair sits on
+ * the wall side of it, facing visitors who come in, and the back wall holds a
+ * plant, an open bookshelf and a reading lamp; the framed print hangs between
+ * them. Every piece is an ordinary layout item, so the owner can select, move,
+ * rotate, delete and keep it. It is sized from the room, so both the 5 by 5.4
+ * member office and the demo's wider offices work: a piece that would cross a
+ * wall, block the doorway or overlap something already in the room is left out
+ * rather than forced in.
+ */
+export function personalOfficeTemplate(room: OfficeRoom): FurnitureItem[] {
+  const b = room.bounds;
+  const cx = b.x + b.w / 2;
+  const cz = b.z + b.d / 2;
+  const roomy = b.w >= 4.2 && b.d >= 4.2;
+  // The owner sits at the wall opposite the door and looks toward it, so a
+  // visitor who walks in sees the owner behind the desk. The live and demo
+  // offices have their doors on different walls, so read it from the room.
+  const toDoor = rotationTowardDoor(room);
+  const dir = DIRECTION[toDoor];
+  const alongZ = dir.z !== 0;
+  const sign = dir.x + dir.z;
+  const length = alongZ ? b.d : b.w;
+  // A small office keeps the desk near the wall so the doorway stays clear.
+  const seatOffset = roomy
+    ? Math.min(1.9, length * 0.36)
+    : Math.min(1.3, length * 0.26);
+  // The wall behind the owner, and a point a given distance from it.
+  const lowWall = alongZ ? b.z : b.x;
+  const highWall = alongZ ? b.z + b.d : b.x + b.w;
+  const farWall = sign > 0 ? lowWall : highWall;
+  const at = (distance: number) =>
+    alongZ
+      ? { x: cx, z: farWall + sign * distance }
+      : { x: farWall + sign * distance, z: cz };
+  const chair = at(seatOffset);
+  const desk = at(seatOffset + 1.1);
+  const rug = at(seatOffset + 0.55);
+  // Along the back wall: a footprint is 1 by 1, so 0.65 clears the wall.
+  const backZ = b.z + 0.65;
+
+  const pieces: TemplatePiece[] = [
+    { key: "rug", catalogId: "rug", x: rug.x, z: rug.z, rotation: 0 },
+    // The owner sits at the wall side, behind the desk, facing visitors.
+    {
+      key: "desk",
+      catalogId: "desk_oak",
+      x: desk.x,
+      z: desk.z,
+      rotation: oppositeRotation(toDoor),
+    },
+    {
+      key: "chair",
+      catalogId: "chair_ergo",
+      x: chair.x,
+      z: chair.z,
+      rotation: toDoor,
+    },
+    { key: "plant", catalogId: "plant", x: b.x + 0.65, z: backZ, rotation: 0 },
+    {
+      key: "shelf",
+      catalogId: "shelf",
+      x: b.x + 1.75,
+      z: backZ,
+      rotation: 0,
+    },
+    {
+      key: "lamp",
+      catalogId: "lamp",
+      x: b.x + b.w - 0.65,
+      z: backZ,
+      rotation: 0,
+    },
+  ];
+
+  if (b.w >= 6.0 && b.d >= 6.5) {
+    pieces.push({
+      key: "sofa",
+      catalogId: "sofa",
+      x: b.x + b.w - 1.1,
+      z: b.z + b.d - 2.0,
+      rotation: 270,
+    });
+  }
+
+  const items: FurnitureItem[] = [];
+  for (const piece of pieces) {
+    if (!CATALOG_BY_ID[piece.catalogId]) continue;
+    const item: FurnitureItem = {
+      id: `${room.id}-${piece.key}`,
+      roomId: room.id,
+      catalogId: piece.catalogId,
+      x: round(piece.x),
+      z: round(piece.z),
+      rotation: piece.rotation,
+    };
+    const blocked = validatePlacement(
+      items,
+      item.catalogId,
+      item.x,
+      item.z,
+      item.rotation,
+      room
+    );
+    if (blocked) continue;
+    items.push(item);
+  }
+
+  items.push(
+    ...visitorSeats(
+      room,
+      items,
+      (distance, across) => {
+        const point = at(distance);
+        return alongZ
+          ? { x: point.x + across, z: point.z }
+          : { x: point.x, z: point.z + across };
+      },
+      seatOffset + 2.2,
+      oppositeRotation(toDoor)
+    )
+  );
+  return items;
+}
+
+/**
+ * Up to two guest chairs on the visitors' side of the desk, turned to face
+ * the owner, so a guest can sit and talk without taking the owner's chair.
+ *
+ * The preferred spot is a pair straight across the desk. A narrow office whose
+ * doorway reaches that far gets the pair spread to either side of the walking
+ * line instead, and an office with room for only one gets one. Each chair goes
+ * through the same placement check as anything the owner places, so a guest
+ * chair never crosses a wall, sits in the doorway or overlaps the desk; when
+ * there is no clear spot the office simply has no guest seating.
+ */
+function visitorSeats(
+  room: OfficeRoom,
+  placed: FurnitureItem[],
+  spot: (distance: number, across: number) => { x: number; z: number },
+  distance: number,
+  rotation: Rotation
+): FurnitureItem[] {
+  if (!CATALOG_BY_ID.chair_ergo) return [];
+
+  const chairAt = (index: number, across: number, row: number) => {
+    const point = spot(row, across);
+    return {
+      id: `${room.id}-visitor-${index}`,
+      roomId: room.id,
+      catalogId: "chair_ergo",
+      x: round(point.x),
+      z: round(point.z),
+      rotation,
+    } satisfies FurnitureItem;
+  };
+  const fits = (item: FurnitureItem, others: FurnitureItem[]) =>
+    !validatePlacement(
+      others,
+      item.catalogId,
+      item.x,
+      item.z,
+      item.rotation,
+      room
+    );
+  // Not overlapping is not enough: the guests must not wall the owner off
+  // from their own chair, and every guest chair has to be reachable too.
+  const owner = placed.find((item) => item.id === `${room.id}-chair`);
+  const walkable = (guests: FurnitureItem[]) =>
+    canReachSeats(
+      room,
+      [...placed, ...guests],
+      owner ? [owner, ...guests] : guests
+    );
+
+  // A chair's footprint is 1 by 1 and the desk is 1 deep, so 1.1 from the
+  // desk's centre leaves a hand's width between them.
+  const rows = [distance, distance - 0.1];
+  // 0.6 sits the pair side by side across the desk; 1.7 keeps both chairs
+  // clear of the doorway's walking line in a small office.
+  const spreads = [0.6, 1.7];
+
+  for (const spread of spreads) {
+    for (const row of rows) {
+      const left = chairAt(1, -spread, row);
+      const right = chairAt(2, spread, row);
+      if (
+        fits(left, placed) &&
+        fits(right, [...placed, left]) &&
+        walkable([left, right])
+      ) {
+        return [left, right];
+      }
+    }
+  }
+
+  for (const across of [0, ...spreads.flatMap((value) => [-value, value])]) {
+    for (const row of rows) {
+      const single = chairAt(1, across, row);
+      if (fits(single, placed) && walkable([single])) return [single];
+    }
+  }
+  return [];
+}
+
+/**
+ * Gives every personal office that has never been saved its starter layout.
+ *
+ * A stored layout always wins, including one the owner emptied on purpose: the
+ * presence of the room key is what says "this office has a saved layout record".
+ * Rooms of other kinds are left alone, and the result is a new map, so a server
+ * payload is never mutated.
+ */
+export function withPersonalOfficeDefaults(
+  rooms: OfficeRoom[],
+  layouts: Record<string, FurnitureItem[]>
+): Record<string, FurnitureItem[]> {
+  const next = { ...layouts };
+  for (const room of rooms) {
+    if (room.kind !== "personal") continue;
+    if (next[room.id] !== undefined) continue;
+    next[room.id] = personalOfficeTemplate(room);
+  }
+  return next;
+}
+
+/**
+ * The furniture of the storey the engine is drawing.
+ *
+ * Offices on different member floors share the same coordinates, so a position
+ * alone cannot say which storey a piece belongs to. Items carry the id of the
+ * room whose layout they were saved in; without that check one floor's desks
+ * would be drawn on every floor. Items saved before the id was stored fall
+ * back to the position test the engine used before.
+ */
+export function floorLayoutItems(
+  items: FurnitureItem[],
+  rooms: OfficeRoom[]
+): FurnitureItem[] {
+  const onFloor = new Set(rooms.map((room) => room.id));
+  return items.filter((item) =>
+    item.roomId
+      ? onFloor.has(item.roomId)
+      : rooms.some((room) => roomContains(room, item.x, item.z))
+  );
+}
+
+/** The items that belong to one room, for placement and collision checks. */
+export function roomLayoutItems(
+  items: FurnitureItem[],
+  room: OfficeRoom
+): FurnitureItem[] {
+  return items.filter((item) =>
+    item.roomId ? item.roomId === room.id : roomContains(room, item.x, item.z)
+  );
+}
+
+/** Roughly the walking avatar's radius, with a little room to spare. */
+const WALK_RADIUS = 0.4;
+/** How finely the floor is sampled for the walkability check. */
+const WALK_STEP = 0.1;
+
+/**
+ * Whether someone walking in through the door can reach a spot beside every
+ * one of the given seats, the way the scene walks a player to a chair. Walls
+ * and every solid piece of furniture block the way.
+ */
+function canReachSeats(
+  room: OfficeRoom,
+  items: FurnitureItem[],
+  seats: FurnitureItem[]
+): boolean {
+  const b = room.bounds;
+  const cols = Math.floor(b.w / WALK_STEP) + 1;
+  const rows = Math.floor(b.d / WALK_STEP) + 1;
+  const solids = items
+    .filter((item) => CATALOG_BY_ID[item.catalogId]?.collision)
+    .map(furnitureAabb);
+
+  const free = (x: number, z: number) => {
+    if (
+      x < b.x + WALK_RADIUS ||
+      x > b.x + b.w - WALK_RADIUS ||
+      z < b.z + WALK_RADIUS ||
+      z > b.z + b.d - WALK_RADIUS
+    ) {
+      return false;
+    }
+    return !solids.some(
+      (box) =>
+        x > box.minX - WALK_RADIUS &&
+        x < box.maxX + WALK_RADIUS &&
+        z > box.minZ - WALK_RADIUS &&
+        z < box.maxZ + WALK_RADIUS
+    );
+  };
+  const toCell = (x: number, z: number) => ({
+    cx: Math.round((x - b.x) / WALK_STEP),
+    cz: Math.round((z - b.z) / WALK_STEP),
+  });
+  const inGrid = (cx: number, cz: number) =>
+    cx >= 0 && cz >= 0 && cx < cols && cz < rows;
+  const pointOf = (cx: number, cz: number) => ({
+    x: b.x + cx * WALK_STEP,
+    z: b.z + cz * WALK_STEP,
+  });
+
+  // The walk starts just inside the doorway, from whichever wall it is on.
+  const center = { x: b.x + b.w / 2, z: b.z + b.d / 2 };
+  const length = Math.hypot(center.x - room.door.x, center.z - room.door.z);
+  const inward = length
+    ? {
+        x: (center.x - room.door.x) / length,
+        z: (center.z - room.door.z) / length,
+      }
+    : { x: 0, z: -1 };
+  let start: { cx: number; cz: number } | null = null;
+  for (let step = 0.5; step <= 1.5 && !start; step += 0.1) {
+    const x = room.door.x + inward.x * step;
+    const z = room.door.z + inward.z * step;
+    if (free(x, z)) start = toCell(x, z);
+  }
+  if (!start) return false;
+
+  const seen = new Uint8Array(cols * rows);
+  const queue: Array<[number, number]> = [[start.cx, start.cz]];
+  seen[start.cz * cols + start.cx] = 1;
+  while (queue.length) {
+    const [cx, cz] = queue.pop()!;
+    for (const [dx, dz] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ]) {
+      const nx = cx + dx;
+      const nz = cz + dz;
+      if (!inGrid(nx, nz) || seen[nz * cols + nx]) continue;
+      const point = pointOf(nx, nz);
+      if (!free(point.x, point.z)) continue;
+      seen[nz * cols + nx] = 1;
+      queue.push([nx, nz]);
+    }
+  }
+
+  // A seat counts as reachable when any of the spots the scene would walk
+  // the player to (in front, beside or behind it) was reached.
+  return seats.every((seat) =>
+    [0.85, 1.1, 1.35].some((reach) =>
+      [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ].some(([dx, dz]) => {
+        const { cx, cz } = toCell(seat.x + dx * reach, seat.z + dz * reach);
+        return inGrid(cx, cz) && seen[cz * cols + cx] === 1;
+      })
+    )
+  );
+}

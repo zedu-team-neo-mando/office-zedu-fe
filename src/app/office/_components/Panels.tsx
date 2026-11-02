@@ -10,6 +10,7 @@ import {
   CircleDot,
   DoorOpen,
   Flower2,
+  Info,
   Lamp,
   Layers,
   Loader2,
@@ -60,6 +61,8 @@ export function RoomDirectory({
   currentRoomId,
   presence,
   playerRoomId,
+  roomCounts,
+  fullRoomIds,
   onClose,
   onNavigate,
 }: {
@@ -68,6 +71,10 @@ export function RoomDirectory({
   currentRoomId: string | null;
   presence: PresencePoint[];
   playerRoomId: string | null;
+  /** Server headcounts for rooms the player is not in (Focus pods). */
+  roomCounts?: Record<string, number>;
+  /** Rooms known to be at capacity. */
+  fullRoomIds?: ReadonlySet<string>;
   onClose: () => void;
   onNavigate: (roomId: string) => void;
 }) {
@@ -89,9 +96,17 @@ export function RoomDirectory({
       if (agent.roomId === "lobby") continue;
       map[agent.roomId] = (map[agent.roomId] ?? 0) + 1;
     }
+    // Presence streams the room the player stands in; other rooms use the
+    // headcount the server last reported. Right after a room change both can
+    // describe the same people, so the larger figure is kept, not the sum.
+    for (const [id, count] of Object.entries(roomCounts ?? {})) {
+      if (id === playerRoomId) continue;
+      map[id] = Math.max(map[id] ?? 0, count);
+    }
     if (playerRoomId) map[playerRoomId] = (map[playerRoomId] ?? 0) + 1;
+    for (const id of Object.keys(map)) if (map[id] <= 0) delete map[id];
     return map;
-  }, [presence, playerRoomId]);
+  }, [presence, playerRoomId, roomCounts]);
 
   return (
     <div
@@ -170,6 +185,10 @@ export function RoomDirectory({
                     room={room}
                     active={room.id === currentRoomId}
                     people={occupancy[room.id] ?? 0}
+                    full={
+                      room.id !== currentRoomId &&
+                      Boolean(fullRoomIds?.has(room.id))
+                    }
                     onNavigate={() => onNavigate(room.id)}
                   />
                 ))}
@@ -189,7 +208,12 @@ export function RoomDirectory({
                   <span className="h-px flex-1 bg-white/6" />
                 </div>
                 <div className="space-y-1">
-                  {group.ids.map((id) => {
+                  {(group.kind
+                    ? rooms
+                        .filter((room) => room.kind === group.kind)
+                        .map((room) => room.id)
+                    : group.ids
+                  ).map((id) => {
                     const room = rooms.find((entry) => entry.id === id);
                     if (!room) return null;
                     return (
@@ -198,6 +222,10 @@ export function RoomDirectory({
                         room={room}
                         active={room.id === currentRoomId}
                         people={occupancy[room.id] ?? 0}
+                        full={
+                          room.id !== currentRoomId &&
+                          Boolean(fullRoomIds?.has(room.id))
+                        }
                         onNavigate={() => onNavigate(room.id)}
                       />
                     );
@@ -223,11 +251,13 @@ function RoomRow({
   room,
   active,
   people,
+  full = false,
   onNavigate,
 }: {
   room: OfficeRoom;
   active: boolean;
   people: number;
+  full?: boolean;
   onNavigate: () => void;
 }) {
   return (
@@ -263,6 +293,11 @@ function RoomRow({
               locked
             </span>
           )}
+          {full && (
+            <span className="rounded-full bg-[#f43f5e]/15 px-1.5 py-0.5 text-[0.52rem] font-extrabold uppercase tracking-wider text-[#fb7185]">
+              full
+            </span>
+          )}
           {active && (
             <span className="rounded-full bg-[#a78bfa]/15 px-1.5 py-0.5 text-[0.52rem] font-extrabold uppercase tracking-wider text-[#c4b5fd]">
               you
@@ -270,11 +305,13 @@ function RoomRow({
           )}
         </span>
         <span className="mt-0.5 block truncate text-[0.62rem] font-medium text-[#77809a]">
-          {room.locked
-            ? room.kind === "personal"
-              ? "A colleague's office · you can walk up to the door"
-              : "Join the channel in Zedu to enter"
-            : room.description}
+          {full
+            ? "Occupied · try again once it frees up"
+            : room.locked
+              ? room.kind === "personal"
+                ? "A colleague's office · you can walk up to the door"
+                : "Join the channel in Zedu to enter"
+              : room.description}
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-1 text-[0.6rem] font-bold text-[#8f98b2]">
@@ -299,16 +336,25 @@ export function ChatPanel({
   onSend,
   onClose,
   live = false,
+  conversations = [],
+  onChooseConversation,
 }: {
   open: boolean;
   room: OfficeRoom | null;
   messages: ChatMessage[];
-  onSend: (text: string) => void;
+  onSend: (text: string) => void | Promise<void>;
   onClose: () => void;
   /** Live office rooms mirror the real Zedu conversation; the demo does not. */
   live?: boolean;
+  conversations?: OfficeRoom[];
+  onChooseConversation?: (roomId: string) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const pendingRef = useRef(false);
+  const roomRef = useRef(room?.id);
+  roomRef.current = room?.id;
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -326,11 +372,30 @@ export function ChatPanel({
     return undefined;
   }, [open]);
 
-  const submit = () => {
+  const submit = async () => {
     const text = draft.trim();
-    if (!text) return;
-    onSend(text);
-    setDraft("");
+    if (!text || !room?.chat || pendingRef.current) return;
+    const submittedRoom = room.id;
+    pendingRef.current = true;
+    setSending(true);
+    setSendError("");
+    try {
+      await onSend(text);
+      if (roomRef.current === submittedRoom) {
+        setDraft((current) => (current === draft ? "" : current));
+      }
+    } catch (error) {
+      if (roomRef.current === submittedRoom) {
+        setSendError(
+          error instanceof Error
+            ? error.message
+            : "Message not sent. Your draft is kept."
+        );
+      }
+    } finally {
+      pendingRef.current = false;
+      setSending(false);
+    }
   };
 
   return (
@@ -366,7 +431,7 @@ export function ChatPanel({
           </div>
           <span className="hidden items-center gap-1 rounded-full border border-[#34d399]/20 bg-[#34d399]/10 px-2 py-1 text-[0.55rem] font-extrabold uppercase tracking-wider text-[#86efac] sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-[#34d399]" />
-            {live ? "synced" : "live"}
+            {live ? (room?.chat ? "synced" : "unavailable") : "live"}
           </span>
           <button
             type="button"
@@ -405,13 +470,14 @@ export function ChatPanel({
               className="border-t border-white/8 p-3"
               onSubmit={(event) => {
                 event.preventDefault();
-                submit();
+                void submit();
               }}
             >
               <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 focus-within:border-[#a78bfa]/45">
                 <input
                   ref={inputRef}
                   value={draft}
+                  disabled={sending}
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     room.kind === "personal"
@@ -422,13 +488,22 @@ export function ChatPanel({
                 />
                 <button
                   type="submit"
-                  disabled={!draft.trim()}
+                  disabled={sending || !draft.trim()}
                   className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#8b5cf6] text-white transition-opacity disabled:opacity-35"
                   aria-label="Send message"
                 >
-                  <Send className="h-3.5 w-3.5" />
+                  {sending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Send className="h-3.5 w-3.5" />
+                  )}
                 </button>
               </div>
+              {sendError && (
+                <p role="alert" className="mt-2 text-xs text-rose-300">
+                  {sendError}
+                </p>
+              )}
               <p className="mt-1.5 text-[0.55rem] font-semibold uppercase tracking-[0.12em] text-[#5f6880]">
                 {live
                   ? "Live · sent to the same conversation as the 2D chat"
@@ -442,12 +517,37 @@ export function ChatPanel({
               <Lock className="h-5 w-5" />
             </span>
             <p className="text-sm font-bold text-white">
-              No chat in this space
+              {live && room?.kind === "personal"
+                ? "No conversation linked"
+                : "No chat in this space"}
             </p>
             <p className="text-[0.72rem] leading-relaxed text-[#7f89a4]">
-              Walk into a channel room or a private office to see the
-              conversation that already exists there.
+              {live && room?.kind === "personal"
+                ? conversations.length > 0
+                  ? "Your own office is not a conversation. Choose the person you want to reply to below."
+                  : "This office has no linked DM conversation. Open a DM in Zedu, then reload Office to chat here."
+                : "Walk into a channel room or a private office to see the conversation that already exists there."}
             </p>
+            {live &&
+              room?.kind === "personal" &&
+              onChooseConversation &&
+              conversations.length > 0 && (
+                <div className="mt-2 flex w-full flex-col gap-2">
+                  <p className="text-xs text-[#b9c1d6]">
+                    Reply using an existing conversation:
+                  </p>
+                  {conversations.map((conversation) => (
+                    <button
+                      key={conversation.id}
+                      type="button"
+                      className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white hover:bg-white/10"
+                      onClick={() => onChooseConversation(conversation.id)}
+                    >
+                      Chat with {conversation.name}
+                    </button>
+                  ))}
+                </div>
+              )}
           </div>
         )}
       </section>
@@ -456,6 +556,23 @@ export function ChatPanel({
 }
 
 function ChatRow({ message }: { message: ChatMessage }) {
+  if (message.system) {
+    return (
+      <div className="flex items-center gap-2 px-1 py-0.5">
+        <Info
+          aria-hidden="true"
+          className="h-3.5 w-3.5 shrink-0 text-[#7f89a4]"
+        />
+        <p className="min-w-0 flex-1 text-[0.72rem] font-medium leading-relaxed text-[#8f98b2]">
+          {message.text}
+        </p>
+        <span className="shrink-0 whitespace-nowrap text-[0.55rem] font-semibold uppercase tracking-wider text-[#5f6880]">
+          {formatTime(message.at)}
+        </span>
+      </div>
+    );
+  }
+
   if (message.self) {
     return (
       <div className="flex justify-end">

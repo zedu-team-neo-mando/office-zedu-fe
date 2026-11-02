@@ -222,7 +222,7 @@ const SideBar: React.FC = () => {
                                 : "group-hover:bg-blue-200"
                             }`}
                           >
-                            <Building2 className="h-5 w-5 text-[#344054]" />
+                            <Building2 className="h-5 w-5 text-white" />
                           </span>
                           <span className="text-white  text-[12px]">
                             Office

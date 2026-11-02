@@ -196,6 +196,17 @@ export interface OfficeSource {
   askZoe(question: string, context: OfficeZoeContext): Promise<string>;
   enterRoom(roomId: string): Promise<void>;
   leaveRoom(roomId: string): Promise<void>;
+  /**
+   * Publishes the local avatar's pose to the room it stands in. The HTTP
+   * status comes back untouched, so the caller can answer `409 not_in_room`
+   * or a `429` without another layer of toasts.
+   */
+  sendPosition(
+    roomId: string,
+    x: number,
+    z: number,
+    yaw: number
+  ): Promise<number>;
   /** Who is standing in a room right now, for the first frame of presence. */
   fetchOccupants(roomId: string): Promise<OfficeOccupant[]>;
   subscribePresence(
@@ -208,6 +219,17 @@ export interface OfficeSource {
    * street must show what is already in it, not only what arrives next.
    */
   fetchMessages(roomId: string): Promise<OfficeChatMessage[]>;
+  /**
+   * The doors of the personal offices on a storey, as their owners set them.
+   * `onDoor` is called with each state that becomes known, including this
+   * user's own. Optional: a source without it shows every door open.
+   */
+  subscribeDoors?(
+    floorIndex: number,
+    onDoor: (roomId: string, open: boolean) => void
+  ): () => void;
+  /** The owner opens or shuts their own office door. */
+  setDoor?(roomId: string, open: boolean): Promise<void>;
   /** Messages other people post into a room while it is being read. */
   subscribeMessages(
     roomId: string,
@@ -224,4 +246,5 @@ export interface OfficeChatMessage {
   text: string;
   at: number;
   self?: boolean;
+  system?: boolean;
 }

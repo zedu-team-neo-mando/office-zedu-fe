@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, MonitorX, RefreshCw } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { useRBAC } from "~/hooks/useRBAC";
 import { showError, showInfo, showSuccess } from "~/components/toast/sonner";
 import EntryScreen from "./EntryScreen";
 import Hud, { type PresencePoint } from "./Hud";
@@ -29,7 +30,10 @@ import {
   type PresenceStatus,
   validatePlacement,
 } from "./office-data";
-import { demoSource, demoTowerOffices } from "./demo-office-source";
+import { demoAvatar, demoSource, demoTowerOffices } from "./demo-office-source";
+import { useOfficePresence } from "./use-office-presence";
+import { OfficeEntryError, isRoomFullError } from "./office-entry";
+import { useOfficeTelemetry } from "./use-office-telemetry";
 import type {
   OfficeOccupant,
   OfficeSource,
@@ -51,6 +55,9 @@ const initialPresence: PresencePoint[] = DEMO_USERS.filter(
   status: user.status,
   tint: user.avatar.tint,
 }));
+
+/** How often the Focus pods on the floor are re-read for a free seat. */
+const AVAILABILITY_POLL_MS = 15_000;
 
 const TOUR_STEPS: TourStep[] = [
   {
@@ -216,8 +223,55 @@ export default function OfficeDemo({
     for (const room of rooms) map[room.id] = room;
     return map;
   }, [rooms]);
-  const selfId = self?.id ?? DEMO_USER_ID;
-  const selfName = self?.name ?? "Ada Obi";
+
+  const demoIdentity = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { id: "demo_player", name: "Colleague", tint: "#8b5cf6" };
+    }
+    const w = window as any;
+    if (w.__officeTabIdentity) {
+      return w.__officeTabIdentity;
+    }
+    const sessionKey = "office_session_user_id";
+    const nameKey = "office_session_user_name";
+    const tintKey = "office_session_user_tint";
+    const id = `demo_${Math.random().toString(36).slice(2, 8)}`;
+    const names = [
+      "Alex",
+      "Jordan",
+      "Taylor",
+      "Casey",
+      "Morgan",
+      "Sam",
+      "Kai",
+      "Riley",
+      "Quinn",
+      "Avery",
+    ];
+    const name = names[Math.floor(Math.random() * names.length)];
+    const tints = [
+      "#8b5cf6",
+      "#3b82f6",
+      "#10b981",
+      "#f59e0b",
+      "#ec4899",
+      "#06b6d4",
+    ];
+    const tint = tints[Math.floor(Math.random() * tints.length)];
+    const identity = { id, name, tint };
+    w.__officeTabIdentity = identity;
+    try {
+      sessionStorage.setItem(sessionKey, id);
+      sessionStorage.setItem(nameKey, name);
+      sessionStorage.setItem(tintKey, tint);
+    } catch {
+      // Ignore storage errors in restricted contexts
+    }
+    return identity;
+  }, []);
+
+  const selfId = self?.id ?? demoIdentity.id;
+  const selfName = self?.name ?? demoIdentity.name;
   const onboardingKey = `office-onboarding-v2-${source.mode}`;
   // The live rooms come from the server, so hit testing has to use them and
   // not the demo floor plan compiled into office-data. Only the storey the
@@ -235,18 +289,48 @@ export default function OfficeDemo({
   const [ready, setReady] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
 
-  const [avatar, setAvatar] = useState<AvatarConfig>(source.initialAvatar);
-  const [avatarDraft, setAvatarDraft] = useState<AvatarConfig>(
-    source.initialAvatar
-  );
+  const [avatar, setAvatar] = useState<AvatarConfig>(() => ({
+    ...source.initialAvatar,
+    tint: self ? source.initialAvatar.tint : demoIdentity.tint,
+  }));
+  const [avatarDraft, setAvatarDraft] = useState<AvatarConfig>(() => ({
+    ...source.initialAvatar,
+    tint: self ? source.initialAvatar.tint : demoIdentity.tint,
+  }));
   const [layouts, setLayouts] = useState<Record<string, FurnitureItem[]>>(
     () => source.initialLayouts
   );
-  const [roomId, setRoomId] = useState<string | null>(
-    () =>
-      rooms.find((room) => room.id === "reception")?.id ?? rooms[0]?.id ?? null
+
+  const commonFloorRooms = useMemo(
+    () => rooms.filter((room) => (room.floorIndex ?? 0) === 0),
+    [rooms]
   );
-  const [player, setPlayer] = useState({ x: 8.5, z: 9.4, yaw: Math.PI });
+  const initialRoom = useMemo(
+    () =>
+      commonFloorRooms.find((room) => room.kind === "reception") ??
+      commonFloorRooms.find((room) => room.id === "reception") ??
+      commonFloorRooms.find((room) => room.kind === "lobby") ??
+      commonFloorRooms.find((room) => room.kind !== "personal") ??
+      commonFloorRooms[0] ??
+      rooms.find((room) => room.kind === "reception") ??
+      rooms[0] ??
+      null,
+    [commonFloorRooms, rooms]
+  );
+  const [roomId, setRoomId] = useState<string | null>(
+    () => initialRoom?.id ?? "reception"
+  );
+
+  useEffect(() => {
+    if (initialRoom?.id && (!roomId || roomId === "reception")) {
+      setRoomId(initialRoom.id);
+    }
+  }, [initialRoom?.id, roomId]);
+  const [player, setPlayer] = useState(() => ({
+    x: initialRoom?.spawn.x ?? 8.5,
+    z: initialRoom?.spawn.z ?? 9.4,
+    yaw: Math.PI,
+  }));
   const [presence, setPresence] = useState<PresencePoint[]>(
     source.mode === "demo" ? initialPresence : []
   );
@@ -254,6 +338,10 @@ export default function OfficeDemo({
     source.mode === "demo" ? "live" : "connecting"
   );
   const [nearZoe, setNearZoe] = useState(false);
+  /** Personal-office doors the owners have opened or shut, by room id. */
+  const [doorStates, setDoorStates] = useState<Record<string, boolean>>({});
+  /** The personal-office door the player is standing at, if any. */
+  const [nearDoorId, setNearDoorId] = useState<string | null>(null);
 
   const [towerOpen, setTowerOpen] = useState(false);
   const [towerFocus, setTowerFocus] = useState<number | null>(null);
@@ -282,6 +370,7 @@ export default function OfficeDemo({
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatTargetId, setChatTargetId] = useState<string | null>(null);
   const [zoeOpen, setZoeOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -320,6 +409,13 @@ export default function OfficeDemo({
   // Rooms whose real conversation has already been read, so re-entering a room
   // does not refetch what is already on screen.
   const historyRef = useRef(new Set<string>());
+  const dirtyLayoutsRef = useRef(new Map<string, FurnitureItem[]>());
+  const queuedLayoutsRef = useRef(new Map<string, FurnitureItem[]>());
+  const saveQueueRef = useRef(Promise.resolve());
+  /** A tower dive that is mid-teleport; tags the next room change as via: tower. */
+  const pendingTeleportRef = useRef<{ roomId: string; via: string } | null>(
+    null
+  );
 
   const currentRoom = roomId ? (roomById[roomId] ?? null) : null;
   const currentItems = currentRoom ? (layouts[currentRoom.id] ?? []) : [];
@@ -329,9 +425,14 @@ export default function OfficeDemo({
           (item) => item.id === selectedFurnitureId
         ) ?? null)
       : null;
-  // Presence rosters may already include the signed-in person; count them once.
+  // Match the directory's room scope; count the signed-in person once.
   const onlineCount =
-    presence.filter((point) => point.id !== selfId).length + 1;
+    presence.filter(
+      (point) =>
+        point.id !== selfId &&
+        point.roomId !== "lobby" &&
+        point.roomId === roomId
+    ).length + 1;
 
   // The tower shows the people, not the rooms: an office is lit while its
   // owner is inside it, and the search only ever matches people. The demo
@@ -387,14 +488,58 @@ export default function OfficeDemo({
     return [...shared, ...people];
   }, [source.mode, source.members, rooms, presence, selfId]);
   const isShared = Boolean(currentRoom && currentRoom.kind !== "personal");
-  const canEdit = Boolean(
-    currentRoom &&
-    !currentRoom.locked &&
-    (currentRoom.kind !== "personal" || currentRoom.ownerId === selfId)
+  const { hasPermission } = useRBAC();
+  const canEditShared =
+    source.mode === "demo" || hasPermission("manage:organization");
+  const canEditRoom = useCallback(
+    (room: (typeof rooms)[number] | null | undefined) =>
+      Boolean(
+        room &&
+        !room.locked &&
+        (room.kind === "personal" ? room.ownerId === selfId : canEditShared)
+      ),
+    [selfId, canEditShared]
   );
-  const currentMessages = currentRoom
-    ? (messagesByRoom[currentRoom.id] ?? [])
-    : [];
+  const canEditRoomRef = useRef(canEditRoom);
+  canEditRoomRef.current = canEditRoom;
+
+  // Only the owner works their own door. The demo's own office belongs to the
+  // seeded "you", whichever demo identity this tab was given.
+  const ownsOffice = useCallback(
+    (room: (typeof rooms)[number] | null | undefined) =>
+      Boolean(
+        room &&
+        room.kind === "personal" &&
+        (room.ownerId === selfId ||
+          room.id === `personal:${selfId}` ||
+          (source.mode === "demo" && room.ownerId === "you"))
+      ),
+    [selfId, source.mode]
+  );
+  const nearDoorRoom = nearDoorId ? (roomById[nearDoorId] ?? null) : null;
+  const nearDoor = nearDoorRoom
+    ? {
+        roomId: nearDoorRoom.id,
+        name: nearDoorRoom.name,
+        open: doorStates[nearDoorRoom.id] !== false,
+        own: ownsOffice(nearDoorRoom),
+      }
+    : null;
+  const canEdit = canEditRoom(currentRoom);
+  const chatRoom = chatTargetId
+    ? (roomById[chatTargetId] ?? currentRoom)
+    : currentRoom;
+  const currentMessages = chatRoom ? (messagesByRoom[chatRoom.id] ?? []) : [];
+  const existingConversations =
+    source.mode === "live"
+      ? rooms.filter(
+          (room) =>
+            room.kind === "personal" &&
+            room.chat &&
+            !room.locked &&
+            room.ownerId !== selfId
+        )
+      : [];
   const nearbyNames = useMemo(() => {
     if (!roomId) return [];
     return presence
@@ -419,6 +564,7 @@ export default function OfficeDemo({
     presence,
     presenceState,
     nearZoe,
+    nearDoor,
     towerOpen,
     editorActive,
     editorCatalogId,
@@ -446,6 +592,7 @@ export default function OfficeDemo({
     presence,
     presenceState,
     nearZoe,
+    nearDoor,
     towerOpen,
     editorActive,
     editorCatalogId,
@@ -495,7 +642,12 @@ export default function OfficeDemo({
             handlersRef.current?.onGhostState?.(valid, reason),
           onTowerPick: (office) => handlersRef.current?.onTowerPick?.(office),
           onTowerHover: (office) => handlersRef.current?.onTowerHover?.(office),
-          onFloorChange: (floorIndex) => setActiveFloor(floorIndex),
+          onFloorChange: (floorIndex) => {
+            setActiveFloor(floorIndex);
+            telemetry.floorChanged(floorIndex);
+          },
+          onDoorProximity: (roomId) =>
+            handlersRef.current?.onDoorProximity?.(roomId),
         },
         {
           isMobile: mobile,
@@ -527,6 +679,12 @@ export default function OfficeDemo({
       engineRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (selfId && engineRef.current) {
+      engineRef.current.setSelfId(selfId);
+    }
+  }, [selfId]);
 
   // The cinematic belongs to the entry screen. Any route into the office —
   // the entry button, a tour, a deep link, the live office that starts there —
@@ -562,14 +720,18 @@ export default function OfficeDemo({
     return () => window.clearInterval(timer);
   }, [phase, ready]);
 
-  // The live office has no entry screen, but it still opens on the tower: the
-  // building is the front door for both routes.
+  // Both demo and live office start on the floor in reception so all
+  // players land in the same room together.
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !ready) return;
     if (openedInitialTowerRef.current) return;
     openedInitialTowerRef.current = true;
-    openTower();
-  }, [source.mode, phase, ready, openTower]);
+    engineRef.current?.setView("floor");
+    setTowerOpen(false);
+    if (initialRoom) {
+      engineRef.current?.teleportToRoom(initialRoom.id, true);
+    }
+  }, [source.mode, phase, ready, initialRoom]);
 
   useEffect(() => {
     engineRef.current?.setRooms(rooms);
@@ -583,6 +745,16 @@ export default function OfficeDemo({
   useEffect(() => {
     engineRef.current?.setTower(source.floors ?? [], towerOffices);
   }, [source.floors, towerOffices]);
+
+  // The demo keeps the avatar in localStorage. Restore it after mount, never
+  // during render, so a reload keeps the saved look without a hydration
+  // mismatch. The live office keeps the avatar the server sent.
+  useEffect(() => {
+    if (source.mode !== "demo") return;
+    const saved = demoAvatar();
+    setAvatar(saved);
+    setAvatarDraft(saved);
+  }, [source.mode]);
 
   useEffect(() => {
     engineRef.current?.setAvatar(avatarDraft);
@@ -658,7 +830,8 @@ export default function OfficeDemo({
       const key = event.key.toLowerCase();
       if (key === "e") {
         event.preventDefault();
-        openZoe();
+        if (!state.nearZoe && state.nearDoor?.own) toggleDoor();
+        else openZoe();
       } else if (key === "b") {
         event.preventDefault();
         toggleEditor();
@@ -723,33 +896,52 @@ export default function OfficeDemo({
   }, [phase, onboardingKey]);
 
   useEffect(() => {
-    if (!hydrated) return;
-    setSaveState("saving");
+    if (!hydrated || dirtyLayoutsRef.current.size === 0) return;
     const timer = window.setTimeout(() => {
-      const state = stateRef.current;
-      const room = state.roomId ? roomById[state.roomId] : null;
-      const roomKey = state.roomId;
-      const items = roomKey ? (state.layouts[roomKey] ?? []) : [];
-
-      void source
-        .saveLayout(roomKey ?? "", items)
-        .catch(() => {
-          // The scene keeps the local state; the next save retries.
-        })
-        .finally(() => {
-          setSaveState(
-            state.editorActive && room && room.kind !== "personal"
-              ? "draft"
-              : "saved"
-          );
+      for (const [roomKey, items] of dirtyLayoutsRef.current) {
+        const room = roomById[roomKey];
+        if (
+          !canEditRoomRef.current(room) ||
+          queuedLayoutsRef.current.get(roomKey) === items
+        ) {
+          continue;
+        }
+        queuedLayoutsRef.current.set(roomKey, items);
+        // Keep each edited room's snapshot, even if the player moves away.
+        // Serial writes prevent an older save overwriting a newer edit.
+        saveQueueRef.current = saveQueueRef.current.then(async () => {
+          try {
+            if (
+              !canEditRoomRef.current(room) ||
+              dirtyLayoutsRef.current.get(roomKey) !== items
+            ) {
+              return;
+            }
+            await source.saveLayout(roomKey, items);
+            if (dirtyLayoutsRef.current.get(roomKey) === items) {
+              dirtyLayoutsRef.current.delete(roomKey);
+            }
+            setSaveState(
+              dirtyLayoutsRef.current.size > 0 || room.kind !== "personal"
+                ? "draft"
+                : "saved"
+            );
+          } catch {
+            setSaveState("draft");
+            showError(
+              "Could not save furniture",
+              "Your changes are not saved. Edit again to retry."
+            );
+          } finally {
+            if (queuedLayoutsRef.current.get(roomKey) === items) {
+              queuedLayoutsRef.current.delete(roomKey);
+            }
+          }
         });
+      }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [layouts, hydrated, source, roomById]);
-
-  useEffect(() => {
-    if (!editorActive) setSaveState("saved");
-  }, [editorActive]);
+  }, [layouts, hydrated, source, roomById, canEditRoom]);
 
   useEffect(() => {
     if (phase !== "office" || !roomId) return;
@@ -829,7 +1021,7 @@ export default function OfficeDemo({
       id: occ.userId,
       name: occ.displayName || occ.username || "Someone",
       x: occ.position?.x ?? 0,
-      z: occ.position?.z ?? 0,
+      z: occ.position?.z ?? (occ.position as any)?.y ?? 0,
       roomId: occ.roomId,
       status: occ.status ?? "online",
       tint: occ.avatar?.tint,
@@ -841,52 +1033,161 @@ export default function OfficeDemo({
     engineRef.current?.setOccupants(occupants);
   }, []);
 
-  // The live office listens for real presence over Centrifugo. Presence is
-  // published per room, so the subscription follows the room the user is in.
+  // Office doors are heard per storey: the owners say whether theirs is open,
+  // and every viewer on the floor draws the same thing.
   useEffect(() => {
-    if (source.mode !== "live" || phase !== "office") return;
+    if (phase !== "office" || !source.subscribeDoors) return;
+    return source.subscribeDoors(activeFloor, (doorRoomId, open) => {
+      setDoorStates((previous) =>
+        previous[doorRoomId] === open
+          ? previous
+          : { ...previous, [doorRoomId]: open }
+      );
+    });
+  }, [source, phase, activeFloor]);
 
-    return source.subscribePresence(
-      roomId ?? "lobby",
-      mergePresence,
-      setPresenceState
-    );
-  }, [source, phase, roomId, mergePresence]);
-
-  // The stream only carries what happens after the subscription, so the room
-  // is read once when the user arrives to find who is already standing there.
   useEffect(() => {
-    if (source.mode !== "live" || phase !== "office" || !roomId) return;
+    engineRef.current?.setDoors(doorStates);
+  }, [doorStates, ready]);
 
+  // Single-occupancy rooms (the Focus pods) are the ones a visitor can be
+  // turned away from, so their headcount is read from the server before
+  // anyone walks up to them. Presence only streams the room the player is in,
+  // which is why the other pods on the floor are polled instead.
+  const limitedRooms = useMemo(
+    () =>
+      rooms.filter(
+        (room) =>
+          room.kind === "focus" &&
+          !room.locked &&
+          room.capacity > 0 &&
+          (room.floorIndex ?? 0) === activeFloor
+      ),
+    [rooms, activeFloor]
+  );
+  const [roomCounts, setRoomCounts] = useState<Record<string, number>>({});
+  const [availabilityTick, setAvailabilityTick] = useState(0);
+  const refreshAvailability = useCallback(
+    () => setAvailabilityTick((value) => value + 1),
+    []
+  );
+
+  useEffect(() => {
+    if (source.mode !== "live" || phase !== "office" || !limitedRooms.length)
+      return;
     let cancelled = false;
-
-    source
-      .fetchOccupants(roomId)
-      .then((occupants) => {
-        if (!cancelled) mergePresence(occupants);
-      })
-      .catch(() => {
-        // A room that cannot be read is not a reason to break the office.
+    // A slow read must not land on top of a newer one, so only the latest
+    // read is applied.
+    let latest = 0;
+    const read = () => {
+      const sequence = ++latest;
+      void Promise.allSettled(
+        limitedRooms.map((room) =>
+          source
+            .fetchOccupants(room.id)
+            .then((occupants) => [room.id, occupants.length] as const)
+        )
+      ).then((results) => {
+        if (cancelled || sequence !== latest) return;
+        setRoomCounts((previous) => {
+          const next = { ...previous };
+          for (const result of results) {
+            if (result.status === "fulfilled") {
+              next[result.value[0]] = result.value[1];
+            }
+          }
+          return next;
+        });
       });
-
+    };
+    read();
+    const timer = window.setInterval(read, AVAILABILITY_POLL_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
-  }, [source, phase, roomId, mergePresence]);
+  }, [source, phase, limitedRooms, availabilityTick]);
 
-  // Live presence follows the room the player is in.
+  // The last read of a pod the player was standing in counted the player too,
+  // so it is read again as soon as they move to another room; otherwise the
+  // pod they just left would show as full until the next poll.
   useEffect(() => {
-    if (source.mode !== "live" || phase !== "office" || !roomId) return;
+    if (source.mode === "live") refreshAvailability();
+  }, [source.mode, roomId, refreshAvailability]);
 
-    source.enterRoom(roomId);
-    return () => {
-      source.leaveRoom(roomId);
-    };
-  }, [source, phase, roomId]);
+  // The room the player stands in is judged by the server's answer to their
+  // own entry, never by a headcount that may be a few seconds old.
+  const fullRoomIds = useMemo(() => {
+    const full = new Set<string>();
+    for (const room of limitedRooms) {
+      if (room.id === roomId) continue;
+      if ((roomCounts[room.id] ?? 0) >= room.capacity) full.add(room.id);
+    }
+    return full;
+  }, [limitedRooms, roomCounts, roomId]);
+
+  // The server said no. The player is put back in the corridor, the room is
+  // marked full if that was the reason, and the headcounts are read again so
+  // the map catches up with the server's decision straight away.
+  const handleEntryRejected = useCallback(
+    (rejectedId: string, error: unknown) => {
+      const room = roomById[rejectedId];
+      const name = room?.name ?? "That room";
+      const full = isRoomFullError(error);
+      // Any answer the server actually gave (4xx or 5xx) means the player was
+      // not admitted. A request with no answer at all never gets here: the
+      // presence hook retries it instead.
+      const refused =
+        error instanceof OfficeEntryError && typeof error.status === "number";
+
+      if (full) {
+        setRoomCounts((previous) => ({
+          ...previous,
+          [rejectedId]: Math.max(
+            previous[rejectedId] ?? 0,
+            room?.capacity ?? 1
+          ),
+        }));
+        showError(
+          `${name} is full`,
+          "Someone is already in there. Try again once it frees up."
+        );
+      } else {
+        showError(
+          `Couldn't enter ${name}`,
+          error instanceof Error ? error.message : "Please try again."
+        );
+      }
+
+      if (full || refused) engineRef.current?.stepOutOfRoom(rejectedId);
+      refreshAvailability();
+    },
+    [roomById, refreshAvailability]
+  );
+
+  // Presence, room entry and movement publishing all follow the room the user
+  // is in, and all of them are sequenced in one place.
+  useOfficePresence({
+    source,
+    active: phase === "office",
+    roomId,
+    pose: player,
+    onOccupants: mergePresence,
+    onState: setPresenceState,
+    onEntryRejected: handleEntryRejected,
+    onEntered: (enteredId) => handleEntered(enteredId),
+  });
+
+  // Telemetry — live mode only, behind the feature flag. The tracker is a pure
+  // module; this hook owns the React side and wraps the engine callbacks.
+  const telemetry = useOfficeTelemetry({
+    source,
+    active: phase === "office",
+  });
 
   // A room being read is a room whose conversation matters: the one you are
   // standing in, or the one held in frame from the street.
-  const readRoomId = towerPreview ?? roomId;
+  const readRoomId = towerPreview ?? chatTargetId ?? roomId;
 
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !readRoomId) return;
@@ -933,10 +1234,12 @@ export default function OfficeDemo({
 
   // The room you are in and the office you are reading from the street are
   // usually different rooms, so they carry separate subscriptions.
+  const conversationRoomId = chatTargetId ?? roomId;
   useEffect(() => {
-    if (source.mode !== "live" || phase !== "office" || !roomId) return;
-    return source.subscribeMessages(roomId, ingestLiveMessage);
-  }, [source, phase, roomId, ingestLiveMessage]);
+    if (source.mode !== "live" || phase !== "office" || !conversationRoomId)
+      return;
+    return source.subscribeMessages(conversationRoomId, ingestLiveMessage);
+  }, [source, phase, conversationRoomId, ingestLiveMessage]);
 
   useEffect(() => {
     if (source.mode !== "live" || !towerPreview) return;
@@ -945,6 +1248,11 @@ export default function OfficeDemo({
 
   // ------------------------------------------------------------------- handlers
 
+  /**
+   * Handles a room change from the engine. Resets editor state, updates the
+   * active room, and reports corridor exits to telemetry so dwell is recorded
+   * when leaving a room into the corridor.
+   */
   function handleRoomChange(room: typeof currentRoom) {
     const state = stateRef.current;
     const previousId = state.roomId;
@@ -964,7 +1272,15 @@ export default function OfficeDemo({
       setSelectedFurnitureId(null);
     }
 
+    setChatTargetId(null);
     setRoomId(nextId);
+
+    // Forward corridor exits to telemetry so dwell is recorded when leaving
+    // a room into the corridor. Destination-room entries are reported by
+    // handleEntered below.
+    if (!room) {
+      telemetry.roomChanged(null, "", "", 0, "walk");
+    }
 
     if (!room) {
       setChatOpen(false);
@@ -972,18 +1288,33 @@ export default function OfficeDemo({
       setChatOpen(true);
       setUnread(0);
     }
+  }
 
-    if (
-      room?.kind === "focus" &&
-      roomById[previousId ?? ""]?.kind !== "focus"
-    ) {
+  /**
+   * Handles the player entering a room. Announces focus mode and reports the
+   * entered room to telemetry, resolved from roomById so the corridor (null
+   * room) is never recorded as a room entry.
+   */
+  function handleEntered(enteredId: string) {
+    if (roomById[enteredId]?.kind === "focus") {
       showInfo("Focus mode", "Your status is now Do not disturb.");
     }
+
+    const enteredRoom = roomById[enteredId];
+    telemetry.roomChanged(
+      enteredRoom?.id ?? null,
+      enteredRoom?.kind ?? "",
+      enteredRoom?.refId ?? "",
+      enteredRoom?.floorIndex ?? 0,
+      pendingTeleportRef.current?.via ?? "walk"
+    );
+    pendingTeleportRef.current = null;
   }
 
   // ---------------------------------------------------------------- the tower
 
   function openTower() {
+    setChatTargetId(null);
     const engine = engineRef.current;
     if (!engine) return;
     setActiveFloor(engine.getActiveFloor());
@@ -995,8 +1326,14 @@ export default function OfficeDemo({
     setMapOpen(false);
     setDirectoryOpen(false);
     setChatOpen(false);
+    telemetry.towerOpened();
   }
 
+  /**
+   * Closes the tower view and resumes dwell tracking for the room that was
+   * active before the tower opened, so tracking restarts without requiring a
+   * new room-entry callback.
+   */
   function closeTower() {
     engineRef.current?.setView("floor");
     setTowerOpen(false);
@@ -1004,6 +1341,7 @@ export default function OfficeDemo({
     setTowerPreview(null);
     setLiftTarget(null);
     setTowerFocus(null);
+    telemetry.towerClosed();
   }
 
   function showWholeTower() {
@@ -1051,7 +1389,9 @@ export default function OfficeDemo({
     }
 
     setLiftTarget(floorIndex);
+    pendingTeleportRef.current = { roomId: targetId, via: "tower" };
     schedule(() => {
+      telemetry.towerClosed(false);
       engine.setView("floor");
       engine.focusRoom(targetId);
       setRoomId(targetId);
@@ -1097,7 +1437,6 @@ export default function OfficeDemo({
     if (target?.locked) {
       engine.pulseOffice(office.roomId, office.floorIndex);
       engine.focusTowerRoom(office.roomId);
-      setTowerHover(office);
       setTowerFocus(office.floorIndex);
       setTowerPreview(null);
       setChatOpen(false);
@@ -1116,7 +1455,6 @@ export default function OfficeDemo({
     // where they are and no room is joined.
     engine.pulseOffice(office.roomId, office.floorIndex);
     engine.focusTowerRoom(office.roomId);
-    setTowerHover(office);
     setTowerFocus(office.floorIndex);
     setLiftTarget(office.floorIndex);
     schedule(() => setLiftTarget(null), 850);
@@ -1141,6 +1479,7 @@ export default function OfficeDemo({
     onRoomChange: handleRoomChange,
     onPosition: (x, z, yaw) => setPlayer({ x, z, yaw }),
     onZoeProximity: setNearZoe,
+    onDoorProximity: setNearDoorId,
     onFurnitureSelect: (id) => {
       setSelectedFurnitureId(id);
       if (id) {
@@ -1160,29 +1499,14 @@ export default function OfficeDemo({
       lastInvalidRef.current = now;
       showInfo("Can't walk there", "Try a clear path or a doorway.");
     },
+    // A click on the canvas takes the same path as picking someone from the
+    // search: the first click frames and previews the office, the second goes in.
     onTowerPick: ({ roomId: picked, floorIndex }) => {
-      const engine = engineRef.current;
-      if (!engine) return;
-      const room = roomById[picked];
-      if (!room) {
-        // A directory-only office: keep the tower open on its storey.
-        engine.pulseOffice(picked, floorIndex);
-        setTowerFocus(floorIndex);
-        return;
-      }
-      if (room.locked) {
-        engine.pulseOffice(picked, floorIndex);
-        setTowerFocus(floorIndex);
-        showInfo("Locked office", room.description);
-        return;
-      }
-      engine.setView("floor");
-      engine.focusRoom(picked);
-      setRoomId(picked);
-      setActiveFloor(floorIndex);
-      setTowerOpen(false);
-      setTowerHover(null);
-      setChatOpen(true);
+      const office = towerOffices.find(
+        (candidate) =>
+          candidate.roomId === picked && candidate.floorIndex === floorIndex
+      );
+      if (office) pickTowerPerson(office);
     },
     onTowerHover: (office) => setTowerHover(office),
   };
@@ -1196,7 +1520,15 @@ export default function OfficeDemo({
   }
 
   function commitRoom(roomKey: string, nextItems: FurnitureItem[]) {
+    if (!canEditRoom(roomById[roomKey])) return;
+    if (
+      JSON.stringify(stateRef.current.layouts[roomKey] ?? []) ===
+      JSON.stringify(nextItems)
+    ) {
+      return;
+    }
     recordHistory(roomKey);
+    dirtyLayoutsRef.current.set(roomKey, nextItems);
     setLayouts((previous) => ({ ...previous, [roomKey]: nextItems }));
     setSaveState("saving");
   }
@@ -1248,6 +1580,7 @@ export default function OfficeDemo({
     }
     const item: FurnitureItem = {
       id: `f-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      roomId: room.id,
       catalogId,
       x,
       z,
@@ -1367,8 +1700,11 @@ export default function OfficeDemo({
   function undo() {
     const state = stateRef.current;
     const roomKey = state.roomId;
-    if (!roomKey || undoStack.length === 0) return;
+    if (!roomKey || !canEditRoom(roomById[roomKey]) || undoStack.length === 0) {
+      return;
+    }
     const previous = undoStack[undoStack.length - 1];
+    dirtyLayoutsRef.current.set(roomKey, previous);
     const current = state.layouts[roomKey] ?? [];
     setUndoStack((stack) => stack.slice(0, -1));
     setRedoStack((stack) => [...stack, current]);
@@ -1379,15 +1715,18 @@ export default function OfficeDemo({
     setSelectedFurnitureId(null);
     setEditorCatalogId(null);
     setEditorMovingId(null);
-    setSaveState("saved");
+    setSaveState("saving");
     showInfo("Undone");
   }
 
   function redo() {
     const state = stateRef.current;
     const roomKey = state.roomId;
-    if (!roomKey || redoStack.length === 0) return;
+    if (!roomKey || !canEditRoom(roomById[roomKey]) || redoStack.length === 0) {
+      return;
+    }
     const next = redoStack[redoStack.length - 1];
+    dirtyLayoutsRef.current.set(roomKey, next);
     const current = state.layouts[roomKey] ?? [];
     setRedoStack((stack) => stack.slice(0, -1));
     setUndoStack((stack) => [...stack, current]);
@@ -1398,7 +1737,7 @@ export default function OfficeDemo({
     setSelectedFurnitureId(null);
     setEditorCatalogId(null);
     setEditorMovingId(null);
-    setSaveState("saved");
+    setSaveState("saving");
     showInfo("Redone");
   }
 
@@ -1420,14 +1759,18 @@ export default function OfficeDemo({
   }
 
   function publishLayout() {
-    if (!currentRoom) return;
+    if (!currentRoom || !canEditRoom(currentRoom)) return;
     const room = currentRoom;
     const items = layouts[room.id] ?? [];
     setSaveState("saving");
-    void source
-      .publishLayout(room.id, items)
+    dirtyLayoutsRef.current.delete(room.id);
+    const publish = saveQueueRef.current.then(() =>
+      source.publishLayout(room.id, items)
+    );
+    saveQueueRef.current = publish.catch(() => {});
+    void publish
       .then(() => {
-        setSaveState("saved");
+        setSaveState(dirtyLayoutsRef.current.size > 0 ? "draft" : "saved");
         showSuccess(
           "Layout published",
           `Everyone in ${room.name} can see the new arrangement.`
@@ -1435,6 +1778,9 @@ export default function OfficeDemo({
       })
       .catch(() => {
         setSaveState("draft");
+        if (!dirtyLayoutsRef.current.has(room.id)) {
+          dirtyLayoutsRef.current.set(room.id, items);
+        }
         showError("Could not publish", "Your draft is still saved locally.");
       });
   }
@@ -1453,7 +1799,6 @@ export default function OfficeDemo({
     setEditorRotation(0);
     setSelectedFurnitureId(null);
     setGhostReason(null);
-    setSaveState("saved");
   }
 
   function toggleEditor() {
@@ -1475,6 +1820,13 @@ export default function OfficeDemo({
       showError("Read-only office", "Only the owner can furnish this office.");
       return;
     }
+    if (!canEditRoom(room)) {
+      showError(
+        "Read-only room",
+        "Only administrators can furnish shared rooms."
+      );
+      return;
+    }
     setEditorActive(true);
     setEditorCatalogId(null);
     setEditorMovingId(null);
@@ -1485,7 +1837,32 @@ export default function OfficeDemo({
     setZoeOpen(false);
     setDirectoryOpen(false);
     setOnboardingOpen(false);
-    setSaveState(room.kind === "personal" ? "saved" : "draft");
+    setSaveState(
+      dirtyLayoutsRef.current.has(room.id) || room.kind !== "personal"
+        ? "draft"
+        : "saved"
+    );
+  }
+
+  function toggleDoor() {
+    const door = stateRef.current.nearDoor;
+    if (!door) return;
+    if (!door.own) {
+      showInfo(
+        door.open ? "Not your door" : "The door is shut",
+        door.open
+          ? `Only ${door.name} can open or close this door.`
+          : `${door.name} has shut their door. Say hello in the conversation instead.`
+      );
+      return;
+    }
+    if (!source.setDoor) return;
+    source.setDoor(door.roomId, !door.open).catch((error: unknown) => {
+      showError(
+        "The door didn't move",
+        error instanceof Error ? error.message : "Please try again."
+      );
+    });
   }
 
   function openZoe() {
@@ -1536,9 +1913,21 @@ export default function OfficeDemo({
 
   function toggleChat() {
     const state = stateRef.current;
-    const room = state.roomId ? roomById[state.roomId] : null;
-    if (!state.chatOpen && (!room || !room.chat)) {
-      showInfo("No chat here", "Walk into a channel room or a private office.");
+    const room = chatTargetId
+      ? roomById[chatTargetId]
+      : state.roomId
+        ? roomById[state.roomId]
+        : null;
+    if (
+      !state.chatOpen &&
+      (!room || (!room.chat && room.kind !== "personal"))
+    ) {
+      showInfo(
+        "No chat here",
+        room?.kind === "personal"
+          ? "This office has no linked conversation. Open a DM in Zedu, then reload Office."
+          : "Walk into a channel room or a private office."
+      );
       return;
     }
     if (!state.chatOpen && state.editorActive) closeEditor();
@@ -1549,6 +1938,15 @@ export default function OfficeDemo({
     });
   }
 
+  function openConversation(id: string) {
+    const target = existingConversations.find((room) => room.id === id);
+    if (!target) return;
+    if (towerOpen) setTowerPreview(id);
+    else setChatTargetId(id);
+    setChatOpen(true);
+    setUnread(0);
+  }
+
   function appendMessage(message: ChatMessage) {
     setMessagesByRoom((previous) => ({
       ...previous,
@@ -1556,11 +1954,23 @@ export default function OfficeDemo({
     }));
   }
 
-  function sendChat(text: string, overrideRoomId?: string) {
+  async function sendChat(text: string, overrideRoomId?: string) {
     const state = stateRef.current;
     const id = overrideRoomId ?? state.roomId;
     const room = id ? roomById[id] : null;
-    if (!room) return;
+    if (!room?.chat) {
+      throw new Error("This space has no linked conversation.");
+    }
+    if (source.mode === "live") {
+      const sent = await source.sendMessage(room.id, text);
+      if (!sent.length)
+        throw new Error(
+          "The message could not be confirmed. Your draft is kept."
+        );
+      for (const message of sent) appendMessage(message);
+      engineRef.current?.showBubble("you", text);
+      return;
+    }
     appendMessage({
       id: `me-${Date.now()}`,
       roomId: room.id,
@@ -1571,13 +1981,6 @@ export default function OfficeDemo({
       self: true,
     });
     engineRef.current?.showBubble("you", text);
-
-    if (source.mode === "live") {
-      void source.sendMessage(room.id, text).catch(() => {
-        showError("Message not sent", "Check your connection and try again.");
-      });
-      return;
-    }
 
     const responder =
       DEMO_USERS.find(
@@ -1647,22 +2050,43 @@ export default function OfficeDemo({
     const engine = engineRef.current;
     if (!engine) return;
 
+    // The tour has to resolve the live plan's ids: a channel room is
+    // channel:<uuid> and a person's office is personal:<user-id>. The demo
+    // keeps #design and the seeded personal office by name.
+    const reception = rooms.find((room) => room.kind === "reception");
+    const channel =
+      rooms.find(
+        (room) =>
+          room.kind === "channel" &&
+          room.chat &&
+          !room.locked &&
+          room.name === "#design"
+      ) ??
+      rooms.find(
+        (room) => room.kind === "channel" && room.chat && !room.locked
+      );
+    const ownOffice = rooms.find(
+      (room) => room.kind === "personal" && room.ownerId === selfId
+    );
+
     if (index === 0 || index === 1) {
-      navigateToRoom("reception");
+      if (reception) navigateToRoom(reception.id);
       return;
     }
 
     if (index === 2) {
-      navigateToRoom("channel:design");
+      if (!channel) return;
+      navigateToRoom(channel.id);
       schedule(() => setChatOpen(true), 760);
       return;
     }
 
     if (index === 3) {
-      navigateToRoom("personal:you");
+      if (!ownOffice) return;
+      navigateToRoom(ownOffice.id);
       schedule(() => {
         const state = stateRef.current;
-        if (state.roomId !== "personal:you") return;
+        if (state.roomId !== ownOffice.id) return;
         setChatOpen(false);
         setEditorActive(true);
         setEditorCatalogId(null);
@@ -1675,10 +2099,9 @@ export default function OfficeDemo({
     }
 
     if (index === 4) {
-      navigateToRoom("reception");
+      if (reception) navigateToRoom(reception.id);
       schedule(() => {
         setChatOpen(false);
-        engine.movePlayerTo(8.5, 5.55, Math.PI);
         engine.faceZoe();
         setZoeOpen(true);
       }, 820);
@@ -1732,6 +2155,23 @@ export default function OfficeDemo({
       );
       return;
     }
+    if (doorStates[id] === false && !ownsOffice(room)) {
+      showInfo(
+        "The door is shut",
+        `${room.name} has shut their door. Say hello in the conversation instead.`
+      );
+      return;
+    }
+    if (fullRoomIds.has(id)) {
+      // The headcount may be a few seconds old, so it is read again: a pod
+      // that has just freed up is open on the next click.
+      refreshAvailability();
+      showInfo(
+        `${room.name} is occupied`,
+        "It's single occupancy and someone is in there. Try another pod."
+      );
+      return;
+    }
     const engine = engineRef.current;
     if (!engine) return;
     closeEditor();
@@ -1768,8 +2208,11 @@ export default function OfficeDemo({
     if (!ready) return;
     setPhase("office");
     engineRef.current?.setCinematic(false);
-    // The tower is the front door: enter the building by choosing a storey.
-    openTower();
+    engineRef.current?.setView("floor");
+    setTowerOpen(false);
+    if (initialRoom) {
+      navigateToRoom(initialRoom.id);
+    }
   }
 
   /**
@@ -1863,11 +2306,14 @@ export default function OfficeDemo({
               self?.role ?? (source.mode === "demo" ? "Product Designer" : "")
             }
             nearZoe={nearZoe}
+            door={nearDoor}
+            onToggleDoor={toggleDoor}
             unread={unread}
             chatOpen={chatOpen}
             editorOpen={editorActive}
             isMobile={isMobile}
             mapOpen={mapOpen}
+            fullRoomIds={fullRoomIds}
             onToggleMap={() => setMapOpen((value) => !value)}
             onOpenDirectory={openDirectory}
             onOpenAvatar={openAvatar}
@@ -1886,16 +2332,23 @@ export default function OfficeDemo({
             currentRoomId={roomId}
             presence={presence}
             playerRoomId={roomId}
+            roomCounts={roomCounts}
+            fullRoomIds={fullRoomIds}
             onClose={() => setDirectoryOpen(false)}
             onNavigate={navigateToRoom}
           />
 
           <ChatPanel
             open={chatOpen}
-            room={currentRoom}
+            room={chatRoom}
             messages={currentMessages}
-            onSend={sendChat}
-            onClose={() => setChatOpen(false)}
+            onSend={(text) => sendChat(text, chatTargetId ?? undefined)}
+            conversations={existingConversations}
+            onChooseConversation={openConversation}
+            onClose={() => {
+              setChatOpen(false);
+              setChatTargetId(null);
+            }}
             live={source.mode === "live"}
           />
 
@@ -1980,6 +2433,8 @@ export default function OfficeDemo({
           messages={messagesByRoom[towerPreview] ?? []}
           live={source.mode === "live"}
           onSend={(text) => sendChat(text, towerPreview)}
+          conversations={existingConversations}
+          onChooseConversation={openConversation}
           onClose={() => {
             setChatOpen(false);
             setTowerPreview(null);
