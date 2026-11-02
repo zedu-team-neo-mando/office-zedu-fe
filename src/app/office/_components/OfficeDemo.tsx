@@ -749,19 +749,6 @@ export default function OfficeDemo({
     return () => window.clearInterval(timer);
   }, [phase, ready]);
 
-  // Both demo and live office start on the floor in reception so all
-  // players land in the same room together.
-  useEffect(() => {
-    if (source.mode !== "live" || phase !== "office" || !ready) return;
-    if (openedInitialTowerRef.current) return;
-    openedInitialTowerRef.current = true;
-    engineRef.current?.setView("floor");
-    setTowerOpen(false);
-    if (initialRoom) {
-      engineRef.current?.teleportToRoom(initialRoom.id, true);
-    }
-  }, [source.mode, phase, ready, initialRoom]);
-
   useEffect(() => {
     engineRef.current?.setRooms(rooms);
     if (source.mode === "live") {
@@ -1220,6 +1207,34 @@ export default function OfficeDemo({
     active: phase === "office",
   });
 
+  // The tower is the front door: a visitor who arrives already inside is put
+  // in front of the building, with the entrance floor still underneath so
+  // closing the tower lands them where they were standing. Both the demo and
+  // the live office take this route, and the entry button does too.
+  useEffect(() => {
+    if (phase !== "office" || !ready) return;
+    if (openedInitialTowerRef.current) return;
+    openedInitialTowerRef.current = true;
+
+    const engine = engineRef.current;
+    if (!engine) return;
+    // Stand at the entrance while the tower is in frame, so closing it lands
+    // the visitor in reception rather than wherever the engine started.
+    if (initialRoom) {
+      engine.teleportToRoom(initialRoom.id, true);
+    }
+    setActiveFloor(engine.getActiveFloor());
+    engine.setView("tower");
+    engine.focusTowerFloor(null);
+    setTowerFocus(null);
+    setTowerPreview(null);
+    setTowerOpen(true);
+    setMapOpen(false);
+    setDirectoryOpen(false);
+    setChatOpen(false);
+    telemetry.towerOpened();
+  }, [phase, ready, initialRoom, telemetry]);
+
   // A room being read is a room whose conversation matters: the one you are
   // standing in, or the one held in frame from the street.
   const readRoomId = towerPreview ?? chatTargetId ?? (inPortal ? null : roomId);
@@ -1472,33 +1487,43 @@ export default function OfficeDemo({
     }
   }
 
-  function pickTowerPerson(office: TowerOffice) {
+  /**
+   * The single click model for the tower, shared by the search list and a click
+   * on the tower itself. The first click frames one room and opens its
+   * conversation without moving the player or joining the room; the second
+   * click on the same room walks in.
+   */
+  function pickTowerRoom(office: { roomId: string; floorIndex: number }) {
     const engine = engineRef.current;
     if (!engine) return;
 
     const target = roomById[office.roomId];
     const walkable = Boolean(target);
 
-    // Reading a locked office is not allowed either: its conversation is the
-    // private DM, and the server refuses to serve it. Show the door and leave
-    // it closed instead of opening an empty chat that cannot send.
+    // Reading a locked room is not allowed either: its conversation is the
+    // private DM or a channel this requester is not in, and the server refuses
+    // to serve it. Show the door and leave it closed instead of opening an
+    // empty chat that cannot send.
     if (target?.locked) {
       engine.pulseOffice(office.roomId, office.floorIndex);
       engine.focusTowerRoom(office.roomId);
       setTowerFocus(office.floorIndex);
       setTowerPreview(null);
       setChatOpen(false);
-      showInfo("Locked office", target.description);
+      showInfo(
+        target.kind === "personal" ? "Locked office" : "Locked room",
+        target.description
+      );
       return;
     }
 
-    // Second click on the same office: go in. The first click only reads it.
+    // Second click on the same room: go in. The first click only reads it.
     if (walkable && towerPreview === office.roomId) {
       diveIntoRoom(office.roomId, office.floorIndex);
       return;
     }
 
-    // First click: hold this one office in frame and open its conversation.
+    // First click: hold this one room in frame and open its conversation.
     // Reading a room from the street is not entering it, so the player stays
     // where they are and no room is joined.
     engine.pulseOffice(office.roomId, office.floorIndex);
@@ -1550,11 +1575,9 @@ export default function OfficeDemo({
     // A click on the canvas takes the same path as picking someone from the
     // search: the first click frames and previews the office, the second goes in.
     onTowerPick: ({ roomId: picked, floorIndex }) => {
-      const office = towerOffices.find(
-        (candidate) =>
-          candidate.roomId === picked && candidate.floorIndex === floorIndex
-      );
-      if (office) pickTowerPerson(office);
+      // A click on the tower and a click on a search result are the same
+      // gesture, so they share one handler: frame and read first, then enter.
+      pickTowerRoom({ roomId: picked, floorIndex });
     },
     onTowerHover: (office) => setTowerHover(office),
   };
@@ -2086,6 +2109,9 @@ export default function OfficeDemo({
 
   function startTour() {
     setOnboardingOpen(false);
+    // The guided tour walks the floor, so it counts as having chosen a storey:
+    // the arrival effect must not pull the visitor back to the tower.
+    openedInitialTowerRef.current = true;
     setPhase("office");
     setTourStep(0);
     engineRef.current?.setView("floor");
@@ -2305,15 +2331,12 @@ export default function OfficeDemo({
     if (editorActive) closeEditor();
   }
 
+  // The arrival effect opens the tower once the phase is "office", so the
+  // button only hands over; it does not choose a view of its own.
   function enterOffice() {
     if (!ready) return;
     setPhase("office");
     engineRef.current?.setCinematic(false);
-    engineRef.current?.setView("floor");
-    setTowerOpen(false);
-    if (initialRoom) {
-      navigateToRoom(initialRoom.id);
-    }
   }
 
   /**
@@ -2523,7 +2546,7 @@ export default function OfficeDemo({
           onShowTower={showWholeTower}
           onClose={closeTower}
           onLeave={exitDemo}
-          onPickPerson={pickTowerPerson}
+          onPickRoom={pickTowerRoom}
         />
       )}
 

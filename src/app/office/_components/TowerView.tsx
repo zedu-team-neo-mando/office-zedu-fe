@@ -23,7 +23,7 @@ export function TowerView({
   onShowTower,
   onClose,
   onLeave,
-  onPickPerson,
+  onPickRoom,
 }: {
   floors: OfficeFloor[];
   offices: TowerOffice[];
@@ -35,7 +35,7 @@ export function TowerView({
   onShowTower: () => void;
   onClose: () => void;
   onLeave: () => void;
-  onPickPerson: (office: TowerOffice) => void;
+  onPickRoom: (office: { roomId: string; floorIndex: number }) => void;
 }) {
   const [query, setQuery] = useState("");
 
@@ -114,7 +114,7 @@ export function TowerView({
                 <li key={office.roomId}>
                   <button
                     type="button"
-                    onClick={() => onPickPerson(office)}
+                    onClick={() => onPickRoom(office)}
                     className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm text-white/85 transition hover:bg-white/10"
                   >
                     <span className="truncate">
@@ -136,7 +136,7 @@ export function TowerView({
           )}
 
           <p className="mt-2 px-1 text-[0.65rem] leading-relaxed text-white/35">
-            Click an office to read its chat, click it again to step inside.
+            Click a room to read its chat, click it again to step inside.
           </p>
         </div>
 
