@@ -1283,6 +1283,14 @@ export default function OfficeDemo({
     const previousId = state.roomId;
     const nextId = room?.id ?? null;
 
+    // The cooldown exists only to stop the landing portal from bouncing the
+    // player straight back. Stepping out of it means the next entry is
+    // deliberate, so it should travel again.
+    const previousRoom = previousId ? roomById[previousId] : undefined;
+    if (previousRoom?.kind === "portal" && room?.kind !== "portal") {
+      portalCooldownRef.current = 0;
+    }
+
     if (previousId !== nextId) {
       if (state.editorActive) {
         setEditorActive(false);
@@ -2191,8 +2199,10 @@ export default function OfficeDemo({
     );
     if (!portal) return;
 
-    // A portal crossing is its own event: the dwell pair it would otherwise
-    // produce is suppressed by the tracker.
+    // Opening the portal from the minimap leaves the current room without a
+    // corridor step, so close that dwell before the crossing suppresses the
+    // pair it would otherwise produce.
+    telemetry.roomChanged(null, "", "", from, "walk");
     telemetry.portalCross("portal");
     portalCooldownRef.current = Date.now() + 1500;
     closeEditor();
