@@ -966,11 +966,7 @@ export class OfficeEngine {
     };
     this.boundWheel = (event) => this.onWheel(event);
     this.boundResize = () => this.resize();
-    this.boundPointerLock = () => {
-      this.callbacks.onMouseLook?.(
-        document.pointerLockElement === this.renderer.domElement
-      );
-    };
+    this.boundPointerLock = () => this.onPointerLockChange();
     this.boundMouseMove = (event) => this.onMouseMove(event);
 
     this.build();
@@ -4593,6 +4589,17 @@ export class OfficeEngine {
     if (this.editState.active && (this.ghostMesh || this.editState.movingId)) {
       this.updateGhostPosition();
     }
+  }
+
+  private onPointerLockChange() {
+    const locked = document.pointerLockElement === this.renderer.domElement;
+    // A request can resolve after first person has already been left. Release
+    // that late lock instead of trapping the cursor in the third-person view.
+    if (locked && !this.firstPerson) {
+      document.exitPointerLock();
+      return;
+    }
+    this.callbacks.onMouseLook?.(locked);
   }
 
   /** Pointer lock reports relative movement on `document`, not the canvas. */

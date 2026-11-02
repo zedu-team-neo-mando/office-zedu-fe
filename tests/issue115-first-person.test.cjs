@@ -152,6 +152,58 @@ test("Leaving first person restores the body and the orbit pitch", () => {
   assert.equal(engine.lookPitch, 0);
 });
 
+test("A late pointer lock is released after first person is left", () => {
+  const engine = harness();
+  const canvas = {};
+  const notifications = [];
+  engine.renderer = { domElement: canvas };
+  engine.callbacks = {
+    onMouseLook: (active) => notifications.push(active),
+  };
+
+  const oldDocument = global.document;
+  let exits = 0;
+  global.document = {
+    pointerLockElement: canvas,
+    exitPointerLock: () => {
+      exits += 1;
+    },
+  };
+
+  try {
+    engine.onPointerLockChange();
+  } finally {
+    global.document = oldDocument;
+  }
+
+  assert.equal(exits, 1);
+  assert.deepEqual(notifications, []);
+});
+
+test("Pointer-lock changes still report the mouse-look state", () => {
+  const engine = harness();
+  const canvas = {};
+  const notifications = [];
+  engine.renderer = { domElement: canvas };
+  engine.callbacks = {
+    onMouseLook: (active) => notifications.push(active),
+  };
+  engine.firstPerson = true;
+
+  const oldDocument = global.document;
+  global.document = { pointerLockElement: canvas, exitPointerLock() {} };
+
+  try {
+    engine.onPointerLockChange();
+    global.document.pointerLockElement = null;
+    engine.onPointerLockChange();
+  } finally {
+    global.document = oldDocument;
+  }
+
+  assert.deepEqual(notifications, [true, false]);
+});
+
 test("Walls stop fading away once the eye is the camera", () => {
   const engine = harness();
   const material = new THREE.MeshBasicMaterial();
