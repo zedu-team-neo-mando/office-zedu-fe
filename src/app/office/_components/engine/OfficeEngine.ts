@@ -629,7 +629,9 @@ export class OfficeEngine {
     const room =
       this.rooms.find((item) => item.kind === "reception") ??
       this.rooms.find((item) => item.kind === "lobby") ??
-      this.rooms.find((item) => item.kind !== "area") ??
+      this.rooms.find(
+        (item) => item.kind !== "area" && item.kind !== "portal"
+      ) ??
       this.rooms[0];
     if (!room) return;
     this.playerPosition.set(room.spawn.x, 0, room.spawn.z);
@@ -1467,6 +1469,7 @@ export class OfficeEngine {
       this.addInteriorWalls();
       this.addFloors();
       this.addDoorFrames();
+      this.addPortalRooms();
       this.addRoomLabels();
       this.addStaticFurniture();
     }
@@ -2197,6 +2200,10 @@ export class OfficeEngine {
     const doorHead = 2.1;
 
     for (const room of this.rooms) {
+      if (room.kind === "portal") {
+        this.addPortalRoom(room);
+        continue;
+      }
       const b = room.bounds;
       const cx = b.x + b.w / 2;
       const cz = b.z + b.d / 2;
@@ -2298,6 +2305,98 @@ export class OfficeEngine {
       strip.position.set(cx, height - 0.09, cz);
       this.buildingGroup.add(strip);
     }
+  }
+
+  /** Demo floors have a fixed shell, so their portal is built from the room. */
+  private addPortalRooms() {
+    for (const room of this.rooms) {
+      if (room.kind === "portal") this.addPortalRoom(room);
+    }
+  }
+
+  /**
+   * A portal is circulation, not a room: a walled vestibule on the storey's
+   * edge with a single lit doorway facing the floor. Walking through it swaps
+   * the storey; the walls are what make it read as a separate place rather
+   * than an open corner.
+   */
+  private addPortalRoom(room: OfficeRoom) {
+    const b = room.bounds;
+    const cx = b.x + b.w / 2;
+    const wall = new THREE.MeshStandardMaterial({
+      color: PALETTE.wall,
+      roughness: 0.94,
+      metalness: 0,
+    });
+    const jamb = new THREE.MeshStandardMaterial({
+      color: PALETTE.woodDark,
+      roughness: 0.62,
+      metalness: 0.06,
+    });
+    const accent = new THREE.Color(room.accent);
+    const glow = new THREE.MeshStandardMaterial({
+      color: accent,
+      emissive: accent,
+      emissiveIntensity: 1.6,
+      roughness: 0.35,
+    });
+    const height = BUILDING.wallHeight;
+    const thickness = 0.16;
+    const doorHead = 2.1;
+    const doorway = Math.min(2.4, Math.max(1.8, b.w * 0.3));
+    const segment = (b.w - doorway) / 2;
+
+    // Three solid sides; the fourth is the door onto the floor.
+    this.addWallBox(b.x, b.z + b.d / 2, thickness, b.d, wall, height);
+    this.addWallBox(b.x + b.w, b.z + b.d / 2, thickness, b.d, wall, height);
+    this.addWallBox(cx, b.z + b.d, b.w, thickness, wall, height);
+
+    if (segment > 0.08) {
+      this.addWallBox(b.x + segment / 2, b.z, segment, thickness, jamb, height);
+      this.addWallBox(
+        b.x + b.w - segment / 2,
+        b.z,
+        segment,
+        thickness,
+        jamb,
+        height
+      );
+    }
+    const head = Math.max(0.3, height - doorHead);
+    this.addWallBox(
+      cx,
+      b.z,
+      doorway,
+      thickness,
+      glow,
+      head,
+      false,
+      doorHead + head / 2
+    );
+
+    const threshold = new THREE.Mesh(
+      new THREE.BoxGeometry(doorway * 0.86, 0.04, 0.7),
+      glow
+    );
+    threshold.position.set(cx, 0.09, b.z + 0.35);
+    this.buildingGroup.add(threshold);
+
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.32, 0.5, 32),
+      new THREE.MeshBasicMaterial({
+        color: accent,
+        transparent: true,
+        opacity: 0.75,
+        side: THREE.DoubleSide,
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(cx, 0.11, b.z + 1.4);
+    this.buildingGroup.add(ring);
+
+    const sign = this.makeLabelSprite(room.name.toUpperCase(), room.accent);
+    sign.position.set(cx, height - 0.2, b.z + 0.25);
+    this.buildingGroup.add(sign);
   }
 
   private addLiveFurniture() {
@@ -2527,6 +2626,8 @@ export class OfficeEngine {
    */
   private addLiveRoomLabels() {
     for (const room of this.rooms) {
+      // The portal carries its own hanging sign above the door.
+      if (room.kind === "portal") continue;
       const b = room.bounds;
       const cx = b.x + b.w / 2;
       const label =
