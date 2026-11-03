@@ -774,17 +774,24 @@ export default function OfficeDemo({
     return () => window.clearInterval(timer);
   }, [phase, ready]);
 
-  // Both demo and live office start on the floor in reception so all
-  // players land in the same room together.
+  // Start live users at reception, but show the full tower first so they can
+  // choose an office before reading its chat or entering it.
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !ready) return;
     if (openedInitialTowerRef.current) return;
     openedInitialTowerRef.current = true;
-    engineRef.current?.setView("floor");
-    setTowerOpen(false);
+    const engine = engineRef.current;
     if (initialRoom) {
-      engineRef.current?.teleportToRoom(initialRoom.id, true);
+      engine?.teleportToRoom(initialRoom.id, true);
     }
+    engine?.setView("tower");
+    engine?.focusTowerFloor(null);
+    setTowerFocus(null);
+    setTowerPreview(null);
+    setTowerOpen(true);
+    setMapOpen(false);
+    setDirectoryOpen(false);
+    setChatOpen(false);
   }, [source.mode, phase, ready, initialRoom]);
 
   useEffect(() => {

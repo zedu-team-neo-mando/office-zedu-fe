@@ -777,11 +777,11 @@ export class TowerScene {
       const cellH = usableH / PERSONAL_ROWS;
       for (let index = 0; index < columns * PERSONAL_ROWS; index += 1) {
         const office = offices[index];
-        const row = index % PERSONAL_ROWS;
-        const col = Math.floor(index / PERSONAL_ROWS);
+        const row = Math.floor(index / columns);
+        const col = index % columns;
         const rect = {
           x: -usableW / 2 + cellW * (col + 0.5),
-          y: baseY + cellH * (row + 0.5),
+          y: baseY + cellH * (PERSONAL_ROWS - row - 0.5),
           w: cellW,
           h: cellH,
           row,

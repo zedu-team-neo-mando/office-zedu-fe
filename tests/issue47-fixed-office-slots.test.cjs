@@ -67,15 +67,11 @@ test("each person's page reveals them, including positions twenty and twenty-one
   });
 });
 
-test("slots fill bottom-to-top and stay fixed as the floor grows", () => {
+test("slots fill the top row left-to-right and stay fixed as the floor grows", () => {
   const full = layout(towerPageOffices(people, 0)).cells;
   assert.deepEqual(
     full.slice(0, 3).map(({ rect }) => [rect.col, rect.row]),
-    [
-      [0, 0],
-      [0, 1],
-      [1, 0],
-    ]
+    [[0, 0], [1, 0], [2, 0]]
   );
   for (const count of [0, 1, 2, 3, 12, 20, 21, 39, 40]) {
     const subset = towerPageOffices(people.slice(0, count), 0);
