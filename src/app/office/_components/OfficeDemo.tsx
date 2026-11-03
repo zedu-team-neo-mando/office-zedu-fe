@@ -16,6 +16,7 @@ import {
 } from "./Panels";
 import ZoeDialog from "./ZoeDialog";
 import { TowerView } from "./TowerView";
+import { towerOfficePage, towerPageOffices } from "./engine/tower-pages";
 import type { TowerOffice } from "./engine/tower-scene";
 import { Onboarding, TourOverlay, type TourStep } from "./Onboarding";
 import {
@@ -344,6 +345,9 @@ export default function OfficeDemo({
   const [nearDoorId, setNearDoorId] = useState<string | null>(null);
 
   const [towerOpen, setTowerOpen] = useState(false);
+  const [selectedTowerPage, setSelectedTowerPage] = useState<number | null>(
+    null
+  );
   const [towerFocus, setTowerFocus] = useState<number | null>(null);
   const openedInitialTowerRef = useRef(false);
   const [activeFloor, setActiveFloor] = useState(0);
@@ -510,6 +514,28 @@ export default function OfficeDemo({
 
     return [...shared, ...people];
   }, [source.mode, source.members, rooms, presence, selfId]);
+  const ownTowerOffice = towerOffices.find((office) => office.isSelf);
+  const towerPage =
+    selectedTowerPage ??
+    (ownTowerOffice ? towerOfficePage(towerOffices, ownTowerOffice) : 0);
+  const visibleTowerOffices = useMemo(
+    () => towerPageOffices(towerOffices, towerPage),
+    [towerOffices, towerPage]
+  );
+
+  function selectTowerPage(page: number) {
+    setSelectedTowerPage(page);
+    setTowerHover(null);
+    setTowerPreview(null);
+    setChatOpen(false);
+    setTowerFocus(null);
+    engineRef.current?.focusTowerRoom(null);
+    engineRef.current?.setTower(
+      source.floors ?? [],
+      towerPageOffices(towerOffices, page)
+    );
+  }
+
   const isShared = Boolean(currentRoom && currentRoom.kind !== "personal");
   const { hasPermission } = useRBAC();
   const canEditShared =
@@ -749,17 +775,24 @@ export default function OfficeDemo({
     return () => window.clearInterval(timer);
   }, [phase, ready]);
 
-  // Both demo and live office start on the floor in reception so all
-  // players land in the same room together.
+  // Start live users at reception, but show the full tower first so they can
+  // choose an office before reading its chat or entering it.
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !ready) return;
     if (openedInitialTowerRef.current) return;
     openedInitialTowerRef.current = true;
-    engineRef.current?.setView("floor");
-    setTowerOpen(false);
+    const engine = engineRef.current;
     if (initialRoom) {
-      engineRef.current?.teleportToRoom(initialRoom.id, true);
+      engine?.teleportToRoom(initialRoom.id, true);
     }
+    engine?.setView("tower");
+    engine?.focusTowerFloor(null);
+    setTowerFocus(null);
+    setTowerPreview(null);
+    setTowerOpen(true);
+    setMapOpen(false);
+    setDirectoryOpen(false);
+    setChatOpen(false);
   }, [source.mode, phase, ready, initialRoom]);
 
   useEffect(() => {
@@ -772,8 +805,8 @@ export default function OfficeDemo({
   // Keep the tower fed with the live directory: the storeys from the backend
   // and who is sitting in each office right now.
   useEffect(() => {
-    engineRef.current?.setTower(source.floors ?? [], towerOffices);
-  }, [source.floors, towerOffices]);
+    engineRef.current?.setTower(source.floors ?? [], visibleTowerOffices);
+  }, [source.floors, visibleTowerOffices]);
 
   // The demo keeps the avatar in localStorage. Restore it after mount, never
   // during render, so a reload keeps the saved look without a hydration
@@ -1476,6 +1509,16 @@ export default function OfficeDemo({
     const engine = engineRef.current;
     if (!engine) return;
 
+    if (office.kind === "personal") {
+      const page = towerOfficePage(towerOffices, office);
+      if (page !== towerPage) {
+        setSelectedTowerPage(page);
+        engine.setTower(
+          source.floors ?? [],
+          towerPageOffices(towerOffices, page)
+        );
+      }
+    }
     const target = roomById[office.roomId];
     const walkable = Boolean(target);
 
@@ -2088,6 +2131,7 @@ export default function OfficeDemo({
     setOnboardingOpen(false);
     setPhase("office");
     setTourStep(0);
+    setTowerOpen(false);
     engineRef.current?.setView("floor");
     engineRef.current?.setCinematic(false);
     try {
@@ -2309,8 +2353,14 @@ export default function OfficeDemo({
     if (!ready) return;
     setPhase("office");
     engineRef.current?.setCinematic(false);
-    engineRef.current?.setView("floor");
-    setTowerOpen(false);
+    engineRef.current?.setView("tower");
+    engineRef.current?.focusTowerFloor(null);
+    setTowerFocus(null);
+    setTowerPreview(null);
+    setTowerOpen(true);
+    setMapOpen(false);
+    setDirectoryOpen(false);
+    setChatOpen(false);
     if (initialRoom) {
       navigateToRoom(initialRoom.id);
     }
@@ -2515,6 +2565,8 @@ export default function OfficeDemo({
         <TowerView
           floors={source.floors ?? []}
           offices={towerOffices}
+          officePage={towerPage}
+          onSelectOfficePage={selectTowerPage}
           currentFloor={activeFloor}
           focusedFloor={towerFocus}
           liftTarget={liftTarget}

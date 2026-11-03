@@ -15,6 +15,8 @@ import type { TowerOffice } from "./engine/tower-scene";
 export function TowerView({
   floors,
   offices,
+  officePage,
+  onSelectOfficePage,
   currentFloor,
   focusedFloor,
   liftTarget,
@@ -27,6 +29,8 @@ export function TowerView({
 }: {
   floors: OfficeFloor[];
   offices: TowerOffice[];
+  officePage: number;
+  onSelectOfficePage: (page: number) => void;
   currentFloor: number;
   focusedFloor: number | null;
   liftTarget: number | null;
@@ -218,6 +222,15 @@ export function TowerView({
           </select>
           <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
         </div>
+        <select
+          aria-label="Choose offices shown outside"
+          value={officePage}
+          onChange={(event) => onSelectOfficePage(Number(event.target.value))}
+          className="rounded-lg border border-white/10 bg-[#0b0f1c] px-2 py-1.5 text-xs text-white"
+        >
+          <option value={0}>Offices 1-20</option>
+          <option value={1}>Offices 21-40</option>
+        </select>
         <span className="hidden text-[0.65rem] text-white/45 sm:inline">
           {focusedFloor === null
             ? "Showing every storey"
