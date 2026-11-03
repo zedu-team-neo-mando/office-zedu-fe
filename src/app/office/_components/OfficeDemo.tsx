@@ -528,6 +528,7 @@ export default function OfficeDemo({
     setTowerHover(null);
     setTowerPreview(null);
     setChatOpen(false);
+    setTowerFocus(null);
     engineRef.current?.focusTowerRoom(null);
     engineRef.current?.setTower(
       source.floors ?? [],
@@ -2130,6 +2131,7 @@ export default function OfficeDemo({
     setOnboardingOpen(false);
     setPhase("office");
     setTourStep(0);
+    setTowerOpen(false);
     engineRef.current?.setView("floor");
     engineRef.current?.setCinematic(false);
     try {
@@ -2351,8 +2353,14 @@ export default function OfficeDemo({
     if (!ready) return;
     setPhase("office");
     engineRef.current?.setCinematic(false);
-    engineRef.current?.setView("floor");
-    setTowerOpen(false);
+    engineRef.current?.setView("tower");
+    engineRef.current?.focusTowerFloor(null);
+    setTowerFocus(null);
+    setTowerPreview(null);
+    setTowerOpen(true);
+    setMapOpen(false);
+    setDirectoryOpen(false);
+    setChatOpen(false);
     if (initialRoom) {
       navigateToRoom(initialRoom.id);
     }

@@ -5,6 +5,10 @@ const test = require("node:test");
 const ts = require("typescript");
 
 const folder = path.join(__dirname, "../src/app/office/_components/engine");
+const officeDemoPath = path.join(
+  __dirname,
+  "../src/app/office/_components/OfficeDemo.tsx"
+);
 function load(file, overrides = {}) {
   const source = fs.readFileSync(path.join(folder, file), "utf8");
   const module = { exports: {} };
@@ -20,6 +24,34 @@ function load(file, overrides = {}) {
     module.exports
   );
   return module.exports;
+}
+function findFunction(source, name) {
+  const ast = ts.createSourceFile(
+    "OfficeDemo.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX
+  );
+  let found;
+  function visit(node) {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === name) {
+      found = node;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert.ok(found, `${name} must exist`);
+  return found.getText(ast);
+}
+function compileFunction(source, dependencies) {
+  const code = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText;
+  return new Function(
+    ...dependencies.map(([name]) => name),
+    `${code}; return ${source.match(/function (\w+)/)[1]};`
+  )(...dependencies.map(([, value]) => value));
 }
 const { TowerScene } = load("tower-scene.ts", {
   "./palette": load("palette.ts"),
@@ -67,11 +99,65 @@ test("each person's page reveals them, including positions twenty and twenty-one
   });
 });
 
+test("picking someone on page two switches groups and opens their chat preview", () => {
+  const calls = [];
+  const engine = {
+    setTower: (_floors, offices) => calls.push(["setTower", offices]),
+    pulseOffice: (...args) => calls.push(["pulseOffice", ...args]),
+    focusTowerRoom: (roomId) => calls.push(["focusTowerRoom", roomId]),
+  };
+  const office = people[20];
+  const dependencies = [
+    ["engineRef", { current: engine }],
+    ["towerOffices", people],
+    ["towerOfficePage", towerOfficePage],
+    ["towerPage", 0],
+    ["setSelectedTowerPage", (page) => calls.push(["page", page])],
+    ["source", { floors: [{ index: 1 }] }],
+    ["towerPageOffices", towerPageOffices],
+    ["roomById", { [office.roomId]: { id: office.roomId, locked: false } }],
+    ["towerPreview", null],
+    ["setTowerFocus", (floor) => calls.push(["focusFloor", floor])],
+    ["setTowerPreview", (roomId) => calls.push(["preview", roomId])],
+    ["setChatOpen", (open) => calls.push(["chatOpen", open])],
+    ["setLiftTarget", (floor) => calls.push(["liftTarget", floor])],
+    ["schedule", (callback) => callback()],
+    ["showInfo", (...args) => calls.push(["showInfo", ...args])],
+    ["diveIntoRoom", (...args) => calls.push(["diveIntoRoom", ...args])],
+    ["setTowerHover", (hover) => calls.push(["hover", hover])],
+  ];
+  const pickTowerPerson = compileFunction(
+    findFunction(fs.readFileSync(officeDemoPath, "utf8"), "pickTowerPerson"),
+    dependencies
+  );
+
+  pickTowerPerson(office);
+
+  assert.ok(calls.some(([name, page]) => name === "page" && page === 1));
+  const [, visible] = calls.find(([name]) => name === "setTower");
+  assert.ok(visible.includes(office));
+  assert.ok(
+    calls.some(
+      ([name, roomId]) => name === "focusTowerRoom" && roomId === office.roomId
+    )
+  );
+  assert.ok(
+    calls.some(
+      ([name, roomId]) => name === "preview" && roomId === office.roomId
+    )
+  );
+  assert.ok(calls.some(([name, open]) => name === "chatOpen" && open));
+});
+
 test("slots fill the top row left-to-right and stay fixed as the floor grows", () => {
   const full = layout(towerPageOffices(people, 0)).cells;
   assert.deepEqual(
     full.slice(0, 3).map(({ rect }) => [rect.col, rect.row]),
-    [[0, 0], [1, 0], [2, 0]]
+    [
+      [0, 0],
+      [1, 0],
+      [2, 0],
+    ]
   );
   for (const count of [0, 1, 2, 3, 12, 20, 21, 39, 40]) {
     const subset = towerPageOffices(people.slice(0, count), 0);
