@@ -351,6 +351,27 @@ export default function OfficeDemo({
     () => rooms.filter((room) => (room.floorIndex ?? 0) === activeFloor),
     [rooms, activeFloor]
   );
+  // A portal on the channels floor returns to the private floor the visitor
+  // came from. The client owns that target because the server cannot know it;
+  // the highest walkable member floor is the default.
+  const memberFloors = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          rooms
+            .filter(
+              (room) => room.kind !== "portal" && (room.floorIndex ?? 0) > 0
+            )
+            .map((room) => room.floorIndex ?? 0)
+        )
+      ).sort((a, b) => a - b),
+    [rooms]
+  );
+  const topMemberFloor = memberFloors[memberFloors.length - 1] ?? null;
+  const [lastMemberFloor, setLastMemberFloor] = useState<number | null>(
+    topMemberFloor
+  );
+  const portalCooldownRef = useRef(0);
   const findRoomAt = useCallback(
     (x: number, z: number) =>
       floorRooms.find(
@@ -418,6 +439,8 @@ export default function OfficeDemo({
   );
 
   const currentRoom = roomId ? (roomById[roomId] ?? null) : null;
+  // A portal is circulation: no conversation, no roster, nobody stands in it.
+  const inPortal = currentRoom?.kind === "portal";
   const currentItems = currentRoom ? (layouts[currentRoom.id] ?? []) : [];
   const selectedItem =
     currentRoom && selectedFurnitureId
@@ -525,7 +548,7 @@ export default function OfficeDemo({
         own: ownsOffice(nearDoorRoom),
       }
     : null;
-  const canEdit = canEditRoom(currentRoom);
+  const canEdit = canEditRoom(currentRoom) && currentRoom?.kind !== "portal";
   const chatRoom = chatTargetId
     ? (roomById[chatTargetId] ?? currentRoom)
     : currentRoom;
@@ -540,6 +563,12 @@ export default function OfficeDemo({
             room.ownerId !== selfId
         )
       : [];
+  // The directory lists places, not doorways: a portal is reached by walking
+  // through it or by clicking it on the map, never as a search result.
+  const directoryRooms = useMemo(
+    () => rooms.filter((room) => room.kind !== "portal"),
+    [rooms]
+  );
   const nearbyNames = useMemo(() => {
     if (!roomId) return [];
     return presence
@@ -1046,6 +1075,12 @@ export default function OfficeDemo({
     });
   }, [source, phase, activeFloor]);
 
+  // Remember the last private floor the visitor stood on, so the return portal
+  // on the channels floor is never a guess.
+  useEffect(() => {
+    if (activeFloor > 0) setLastMemberFloor(activeFloor);
+  }, [activeFloor]);
+
   useEffect(() => {
     engineRef.current?.setDoors(doorStates);
   }, [doorStates, ready]);
@@ -1170,7 +1205,7 @@ export default function OfficeDemo({
   useOfficePresence({
     source,
     active: phase === "office",
-    roomId,
+    roomId: inPortal ? null : roomId,
     pose: player,
     onOccupants: mergePresence,
     onState: setPresenceState,
@@ -1187,7 +1222,7 @@ export default function OfficeDemo({
 
   // A room being read is a room whose conversation matters: the one you are
   // standing in, or the one held in frame from the street.
-  const readRoomId = towerPreview ?? chatTargetId ?? roomId;
+  const readRoomId = towerPreview ?? chatTargetId ?? (inPortal ? null : roomId);
 
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !readRoomId) return;
@@ -1234,7 +1269,7 @@ export default function OfficeDemo({
 
   // The room you are in and the office you are reading from the street are
   // usually different rooms, so they carry separate subscriptions.
-  const conversationRoomId = chatTargetId ?? roomId;
+  const conversationRoomId = chatTargetId ?? (inPortal ? null : roomId);
   useEffect(() => {
     if (source.mode !== "live" || phase !== "office" || !conversationRoomId)
       return;
@@ -1257,6 +1292,14 @@ export default function OfficeDemo({
     const state = stateRef.current;
     const previousId = state.roomId;
     const nextId = room?.id ?? null;
+
+    // The cooldown exists only to stop the landing portal from bouncing the
+    // player straight back. Stepping out of it means the next entry is
+    // deliberate, so it should travel again.
+    const previousRoom = previousId ? roomById[previousId] : undefined;
+    if (previousRoom?.kind === "portal" && room?.kind !== "portal") {
+      portalCooldownRef.current = 0;
+    }
 
     if (previousId !== nextId) {
       if (state.editorActive) {
@@ -1284,6 +1327,11 @@ export default function OfficeDemo({
 
     if (!room) {
       setChatOpen(false);
+    } else if (room.kind === "portal") {
+      // Walking through the doorway swaps the storey in place.
+      setChatOpen(false);
+      travelThroughPortal();
+      return;
     } else if (room.kind === "channel") {
       setChatOpen(true);
       setUnread(0);
@@ -1816,6 +1864,10 @@ export default function OfficeDemo({
       showError("Locked room", room.description);
       return;
     }
+    if (room.kind === "portal") {
+      showInfo("This is a doorway", "Walk through it to change floors.");
+      return;
+    }
     if (room.kind === "personal" && room.ownerId !== selfId) {
       showError("Read-only office", "Only the owner can furnish this office.");
       return;
@@ -2143,6 +2195,49 @@ export default function OfficeDemo({
     setAvatarDraft(avatar);
   }
 
+  /**
+   * The portal is the second door between the two wings of the building. It
+   * swaps the storey in place and lands the player inside the matching portal
+   * on the other side, so only one floor is ever built in 3D.
+   */
+  function travelThroughPortal() {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (Date.now() < portalCooldownRef.current) return;
+
+    const from = engine.getActiveFloor();
+    const target = from === 0 ? (lastMemberFloor ?? topMemberFloor) : 0;
+    if (target === null || target === from) return;
+
+    const portal = rooms.find(
+      (room) => room.kind === "portal" && (room.floorIndex ?? 0) === target
+    );
+    if (!portal) return;
+
+    // Opening the portal from the minimap leaves the current room without a
+    // corridor step, so close that dwell before the crossing suppresses the
+    // pair it would otherwise produce.
+    telemetry.roomChanged(null, "", "", from, "walk");
+    telemetry.portalCross("portal");
+    portalCooldownRef.current = Date.now() + 1500;
+    closeEditor();
+    setChatOpen(false);
+    setDirectoryOpen(false);
+    setZoeOpen(false);
+    setAvatarOpen(false);
+    setOnboardingOpen(false);
+    setFading(true);
+    schedule(() => {
+      engine.setView("floor");
+      engine.setActiveFloor(target);
+      engine.movePlayerTo(portal.spawn.x, portal.spawn.z, Math.PI);
+      setActiveFloor(target);
+      setRoomId(portal.id);
+      if (target > 0) setLastMemberFloor(target);
+      schedule(() => setFading(false), 140);
+    }, 160);
+  }
+
   function navigateToRoom(id: string) {
     const room = roomById[id];
     if (!room) return;
@@ -2153,6 +2248,12 @@ export default function OfficeDemo({
           ? `${room.name} keeps their own door. Say hello in the conversation instead.`
           : room.description
       );
+      return;
+    }
+    // A portal is not a destination on this floor: the map click walks through
+    // it, exactly as walking into the doorway does.
+    if (room.kind === "portal") {
+      travelThroughPortal();
       return;
     }
     if (doorStates[id] === false && !ownsOffice(room)) {
@@ -2328,7 +2429,7 @@ export default function OfficeDemo({
 
           <RoomDirectory
             open={directoryOpen}
-            rooms={rooms}
+            rooms={directoryRooms}
             currentRoomId={roomId}
             presence={presence}
             playerRoomId={roomId}

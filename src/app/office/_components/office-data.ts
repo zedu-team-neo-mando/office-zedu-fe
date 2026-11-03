@@ -10,7 +10,8 @@ export type RoomKind =
   | "focus"
   | "channel"
   | "personal"
-  | "area";
+  | "area"
+  | "portal";
 
 export type PresenceStatus = "online" | "idle" | "away" | "call" | "dnd";
 
