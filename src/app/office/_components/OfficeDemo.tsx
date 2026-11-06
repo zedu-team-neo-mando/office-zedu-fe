@@ -1607,10 +1607,51 @@ export default function OfficeDemo({
    * click on the same room walks in.
    */
   function pickTowerRoom(office: { roomId: string; floorIndex: number }) {
+    void readTowerRoom(office);
+  }
+
+  async function readTowerRoom(office: { roomId: string; floorIndex: number }) {
     const engine = engineRef.current;
     if (!engine) return;
 
-    const target = roomById[office.roomId];
+    let target = roomById[office.roomId];
+
+    // A private office is closed only because no DM with its owner exists yet.
+    // Zedu chat treats a click on a name as starting the conversation, and that
+    // conversation is what makes the office visitable, so start it here rather
+    // than sending the visitor off to the 2D app to do it first. A locked
+    // channel is a permission, not a missing conversation, and stays closed.
+    if (
+      target?.locked &&
+      target.kind === "personal" &&
+      source.openConversation &&
+      target.ownerId
+    ) {
+      engine.pulseOffice(office.roomId, office.floorIndex);
+      engine.focusTowerRoom(office.roomId);
+      setTowerFocus(office.floorIndex);
+      try {
+        const opened = await source.openConversation(target.ownerId);
+        if (!opened) {
+          setTowerPreview(null);
+          setChatOpen(false);
+          showInfo("Locked office", target.description);
+          return;
+        }
+        target = opened;
+      } catch (error) {
+        setTowerPreview(null);
+        setChatOpen(false);
+        showError(
+          "Couldn't open that office",
+          error instanceof Error
+            ? error.message
+            : "The conversation could not be started."
+        );
+        return;
+      }
+    }
+
     const walkable = Boolean(target);
 
     // Reading a locked room is not allowed either: its conversation is the
