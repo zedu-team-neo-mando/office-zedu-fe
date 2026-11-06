@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, MonitorX, RefreshCw } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { GetRequest } from "~/utils/new-request";
 import { useRBAC } from "~/hooks/useRBAC";
 import { showError, showInfo, showSuccess } from "~/components/toast/sonner";
 import EntryScreen from "./EntryScreen";
@@ -16,7 +17,8 @@ import {
 } from "./Panels";
 import ZoeDialog from "./ZoeDialog";
 import { TowerView } from "./TowerView";
-import type { TowerOffice } from "./engine/tower-scene";
+import type { TowerOffice, TowerOccupant } from "./engine/tower-scene";
+import { normalizeOccupant } from "../../(client)/[org]/_components/office/live-office-source";
 import { Onboarding, TourOverlay, type TourStep } from "./Onboarding";
 import {
   CATALOG_BY_ID,
@@ -457,12 +459,29 @@ export default function OfficeDemo({
         point.roomId === roomId
     ).length + 1;
 
+  // Who is standing anywhere in the building, grouped by room. Populated by
+  // fetchOccupancy from a single building-wide read (live) or the seeded
+  // directory (demo).
+  const [occupantsByRoom, setOccupantsByRoom] = useState<
+    Record<string, TowerOccupant[]>
+  >({});
+
   // The tower shows the people, not the rooms: an office is lit while its
   // owner is inside it, and the search only ever matches people. The demo
   // adds the directory-only storeys that fill the building out to ten floors.
   const towerOffices = useMemo<TowerOffice[]>(() => {
+    // The occupancy read is source-agnostic, so both branches attach it the
+    // same way. The demo has no request of its own but still knows where every
+    // seeded person stands, so its cells show faces too.
+    const attachOccupants = (offices: TowerOffice[]) =>
+      offices.map((office) => {
+        const occupants = occupantsByRoom[office.roomId] ?? [];
+        if (!occupants.length) return office;
+        return { ...office, occupants };
+      });
+
     if (source.mode === "demo") {
-      return demoTowerOffices(rooms, presence);
+      return attachOccupants(demoTowerOffices(rooms, presence));
     }
 
     // The tower is a directory of the whole organisation. The member roster
@@ -508,8 +527,9 @@ export default function OfficeDemo({
         interactive: !room.locked,
       }));
 
-    return [...shared, ...people];
-  }, [source.mode, source.members, rooms, presence, selfId]);
+    return attachOccupants([...shared, ...people]);
+  }, [source.mode, source.members, rooms, presence, selfId, occupantsByRoom]);
+
   const isShared = Boolean(currentRoom && currentRoom.kind !== "personal");
   const { hasPermission } = useRBAC();
   const canEditShared =
@@ -748,19 +768,6 @@ export default function OfficeDemo({
 
     return () => window.clearInterval(timer);
   }, [phase, ready]);
-
-  // Both demo and live office start on the floor in reception so all
-  // players land in the same room together.
-  useEffect(() => {
-    if (source.mode !== "live" || phase !== "office" || !ready) return;
-    if (openedInitialTowerRef.current) return;
-    openedInitialTowerRef.current = true;
-    engineRef.current?.setView("floor");
-    setTowerOpen(false);
-    if (initialRoom) {
-      engineRef.current?.teleportToRoom(initialRoom.id, true);
-    }
-  }, [source.mode, phase, ready, initialRoom]);
 
   useEffect(() => {
     engineRef.current?.setRooms(rooms);
@@ -1062,8 +1069,92 @@ export default function OfficeDemo({
     engineRef.current?.setOccupants(occupants);
   }, []);
 
-  // Office doors are heard per storey: the owners say whether theirs is open,
-  // and every viewer on the floor draws the same thing.
+  // ------------------------------------------------------------------ occupancy
+  // Who is standing anywhere in the building: one list, refreshed from a single
+  // endpoint instead of one request per room. Live mode asks the backend; demo
+  // mode builds it from the seeded directory, which already knows every
+  // person's room.
+  const fetchOccupancy = useCallback(async () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+
+    let occupants: OfficeOccupant[] = [];
+    if (source.mode === "live") {
+      const response = await GetRequest("/office/occupancy");
+      // GetRequest returns the error object instead of throwing. Keep the
+      // roster that is already on screen rather than blanking the tower on a
+      // failed poll.
+      const status = (response as { status?: number } | undefined)?.status;
+      if (typeof status !== "number" || status < 200 || status >= 300) return;
+
+      // Office routes answer with the usual { status, message, data } envelope,
+      // so the roster is `data.data`, with a bare array or `occupants` field
+      // accepted as well.
+      const envelope = (response as { data?: { data?: unknown } })?.data;
+      const payload = envelope?.data ?? envelope;
+      const list: unknown[] = Array.isArray(payload)
+        ? payload
+        : ((payload as { occupants?: unknown[] } | undefined)?.occupants ?? []);
+      occupants = list
+        .map((item) =>
+          normalizeOccupant(item, (item as { roomId?: string })?.roomId ?? "")
+        )
+        .filter((occ: OfficeOccupant | null): occ is OfficeOccupant =>
+          Boolean(occ)
+        );
+    } else {
+      occupants = demoOccupants();
+    }
+
+    // Join the roster for name, portrait and tint: the source is the single
+    // truth about who a person is, so the tower never invents a second
+    // identity for someone.
+    const membersById = new Map(source.members.map((m) => [m.userId, m]));
+    const byRoom = new Map<string, TowerOccupant[]>();
+    for (const occ of occupants) {
+      const member = membersById.get(occ.userId) ?? undefined;
+      const row: TowerOccupant = {
+        userId: occ.userId,
+        name: member?.displayName ?? occ.displayName,
+        avatarUrl: member?.avatarUrl,
+        tint: member?.tint ?? occ.avatar?.tint,
+        status: occ.status,
+      };
+      const list = byRoom.get(occ.roomId) ?? [];
+      list.push(row);
+      byRoom.set(occ.roomId, list);
+    }
+
+    const next = Object.fromEntries(byRoom);
+    setOccupantsByRoom(next);
+    // Feed the cells without a rebuild unless someone moved rooms.
+    engine.setTowerOccupants(next);
+  }, [source.members, source.mode]);
+
+  // Demo mode: every seeded person is where their roster says they are, so the
+  // directory reads the same way as live's single building-wide read.
+  function demoOccupants(): OfficeOccupant[] {
+    return DEMO_USERS.filter((user) => !user.isZoe && user.id !== "you").map(
+      (user) => ({
+        userId: user.id,
+        displayName: user.name,
+        username: user.username,
+        avatar: {
+          tint: user.avatar.tint,
+          body: user.avatar.body,
+          outfit: user.avatar.outfit,
+          accessory: user.avatar.accessory,
+        },
+        roomId: user.roomId,
+        status: user.status,
+        position: user.position as any,
+        rotation: 0,
+        updatedAt: new Date().toISOString(),
+      })
+    );
+  }
+
+  // ------------------------------------------------------------------ doors
   useEffect(() => {
     if (phase !== "office" || !source.subscribeDoors) return;
     return source.subscribeDoors(activeFloor, (doorRoomId, open) => {
@@ -1150,6 +1241,15 @@ export default function OfficeDemo({
     if (source.mode === "live") refreshAvailability();
   }, [source.mode, roomId, refreshAvailability]);
 
+  // Refresh who is standing in the building once in a while so the tower's
+  // faces stay current without a page reload and without one request per room.
+  useEffect(() => {
+    if (phase !== "office" || !ready) return;
+    fetchOccupancy();
+    const timer = window.setInterval(fetchOccupancy, AVAILABILITY_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [phase, ready, fetchOccupancy]);
+
   // The room the player stands in is judged by the server's answer to their
   // own entry, never by a headcount that may be a few seconds old.
   const fullRoomIds = useMemo(() => {
@@ -1219,6 +1319,34 @@ export default function OfficeDemo({
     source,
     active: phase === "office",
   });
+
+  // The tower is the front door: a visitor who arrives already inside is put
+  // in front of the building, with the entrance floor still underneath so
+  // closing the tower lands them where they were standing. Both the demo and
+  // the live office take this route, and the entry button does too.
+  useEffect(() => {
+    if (phase !== "office" || !ready) return;
+    if (openedInitialTowerRef.current) return;
+    openedInitialTowerRef.current = true;
+
+    const engine = engineRef.current;
+    if (!engine) return;
+    // Stand at the entrance while the tower is in frame, so closing it lands
+    // the visitor in reception rather than wherever the engine started.
+    if (initialRoom) {
+      engine.teleportToRoom(initialRoom.id, true);
+    }
+    setActiveFloor(engine.getActiveFloor());
+    engine.setView("tower");
+    engine.focusTowerFloor(null);
+    setTowerFocus(null);
+    setTowerPreview(null);
+    setTowerOpen(true);
+    setMapOpen(false);
+    setDirectoryOpen(false);
+    setChatOpen(false);
+    telemetry.towerOpened();
+  }, [phase, ready, initialRoom, telemetry]);
 
   // A room being read is a room whose conversation matters: the one you are
   // standing in, or the one held in frame from the street.
@@ -1472,33 +1600,43 @@ export default function OfficeDemo({
     }
   }
 
-  function pickTowerPerson(office: TowerOffice) {
+  /**
+   * The single click model for the tower, shared by the search list and a click
+   * on the tower itself. The first click frames one room and opens its
+   * conversation without moving the player or joining the room; the second
+   * click on the same room walks in.
+   */
+  function pickTowerRoom(office: { roomId: string; floorIndex: number }) {
     const engine = engineRef.current;
     if (!engine) return;
 
     const target = roomById[office.roomId];
     const walkable = Boolean(target);
 
-    // Reading a locked office is not allowed either: its conversation is the
-    // private DM, and the server refuses to serve it. Show the door and leave
-    // it closed instead of opening an empty chat that cannot send.
+    // Reading a locked room is not allowed either: its conversation is the
+    // private DM or a channel this requester is not in, and the server refuses
+    // to serve it. Show the door and leave it closed instead of opening an
+    // empty chat that cannot send.
     if (target?.locked) {
       engine.pulseOffice(office.roomId, office.floorIndex);
       engine.focusTowerRoom(office.roomId);
       setTowerFocus(office.floorIndex);
       setTowerPreview(null);
       setChatOpen(false);
-      showInfo("Locked office", target.description);
+      showInfo(
+        target.kind === "personal" ? "Locked office" : "Locked room",
+        target.description
+      );
       return;
     }
 
-    // Second click on the same office: go in. The first click only reads it.
+    // Second click on the same room: go in. The first click only reads it.
     if (walkable && towerPreview === office.roomId) {
       diveIntoRoom(office.roomId, office.floorIndex);
       return;
     }
 
-    // First click: hold this one office in frame and open its conversation.
+    // First click: hold this one room in frame and open its conversation.
     // Reading a room from the street is not entering it, so the player stays
     // where they are and no room is joined.
     engine.pulseOffice(office.roomId, office.floorIndex);
@@ -1550,11 +1688,9 @@ export default function OfficeDemo({
     // A click on the canvas takes the same path as picking someone from the
     // search: the first click frames and previews the office, the second goes in.
     onTowerPick: ({ roomId: picked, floorIndex }) => {
-      const office = towerOffices.find(
-        (candidate) =>
-          candidate.roomId === picked && candidate.floorIndex === floorIndex
-      );
-      if (office) pickTowerPerson(office);
+      // A click on the tower and a click on a search result are the same
+      // gesture, so they share one handler: frame and read first, then enter.
+      pickTowerRoom({ roomId: picked, floorIndex });
     },
     onTowerHover: (office) => setTowerHover(office),
   };
@@ -2086,6 +2222,9 @@ export default function OfficeDemo({
 
   function startTour() {
     setOnboardingOpen(false);
+    // The guided tour walks the floor, so it counts as having chosen a storey:
+    // the arrival effect must not pull the visitor back to the tower.
+    openedInitialTowerRef.current = true;
     setPhase("office");
     setTourStep(0);
     engineRef.current?.setView("floor");
@@ -2305,15 +2444,12 @@ export default function OfficeDemo({
     if (editorActive) closeEditor();
   }
 
+  // The arrival effect opens the tower once the phase is "office", so the
+  // button only hands over; it does not choose a view of its own.
   function enterOffice() {
     if (!ready) return;
     setPhase("office");
     engineRef.current?.setCinematic(false);
-    engineRef.current?.setView("floor");
-    setTowerOpen(false);
-    if (initialRoom) {
-      navigateToRoom(initialRoom.id);
-    }
   }
 
   /**
@@ -2523,7 +2659,7 @@ export default function OfficeDemo({
           onShowTower={showWholeTower}
           onClose={closeTower}
           onLeave={exitDemo}
-          onPickPerson={pickTowerPerson}
+          onPickRoom={pickTowerRoom}
         />
       )}
 
