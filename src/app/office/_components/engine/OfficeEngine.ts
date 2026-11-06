@@ -54,6 +54,8 @@ export interface EngineCallbacks {
   onFloorChange?: (floorIndex: number) => void;
   /** The personal-office door the player is standing at, or null. */
   onDoorProximity?: (roomId: string | null) => void;
+  /** The pointer is captured for mouse-look, or was just released. */
+  onMouseLook?: (active: boolean) => void;
 }
 
 export interface EditState {
@@ -142,6 +144,11 @@ const DEMO_PLAN = {
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
+
+/** ~83°, short of the 90° where `lookAt` flips the camera over. */
+const FIRST_PERSON_PITCH = 1.45;
+/** Free-look reads raw pixels; dragging keeps its own slower factor. */
+const MOUSE_LOOK = 0.0022;
 
 function skinTone(seed: string): number {
   const tones = [0xf1c7a5, 0xd9a066, 0xa86b3d, 0x7a4a2b, 0x5a3520, 0xe8b990];
@@ -479,6 +486,8 @@ export class OfficeEngine {
   private cameraYaw = 0;
   private cameraPitch = 0.86;
   private cameraDistance = 9;
+  private lookPitch = 0;
+  private firstPerson = false;
   private cameraTarget = new THREE.Vector3(8.5, 1.1, 9.4);
   private cameraPosition = new THREE.Vector3(8.5, 7, 18);
   private cinematic = true;
@@ -894,6 +903,8 @@ export class OfficeEngine {
   private boundPointerLeave: () => void;
   private boundWheel: (event: WheelEvent) => void;
   private boundResize: () => void;
+  private boundPointerLock: () => void;
+  private boundMouseMove: (event: MouseEvent) => void;
 
   constructor(
     container: HTMLDivElement,
@@ -991,6 +1002,8 @@ export class OfficeEngine {
     };
     this.boundWheel = (event) => this.onWheel(event);
     this.boundResize = () => this.resize();
+    this.boundPointerLock = () => this.onPointerLockChange();
+    this.boundMouseMove = (event) => this.onMouseMove(event);
 
     this.build();
     if (options?.avatar) this.setAvatar(options.avatar);
@@ -1011,6 +1024,8 @@ export class OfficeEngine {
     this.renderer.domElement.addEventListener("wheel", this.boundWheel, {
       passive: false,
     });
+    document.addEventListener("pointerlockchange", this.boundPointerLock);
+    document.addEventListener("mousemove", this.boundMouseMove);
     window.addEventListener("resize", this.boundResize);
 
     if (typeof ResizeObserver !== "undefined") {
@@ -1048,6 +1063,7 @@ export class OfficeEngine {
     );
     this.playerRig.group.rotation.y = this.playerYaw;
     this.avatarGroup.add(this.playerRig.group);
+    this.playerRig.group.visible = !this.firstPerson;
   }
 
   setFurniture(items: FurnitureItem[]) {
@@ -1190,6 +1206,57 @@ export class OfficeEngine {
 
   setCinematic(cinematic: boolean) {
     this.cinematic = cinematic;
+  }
+
+  /**
+   * First person is a view, not a mode: movement, collision and presence keep
+   * running exactly as they do behind the third-person camera.
+   */
+  setFirstPerson(active: boolean) {
+    if (this.firstPerson === active) return;
+    this.firstPerson = active;
+    if (active) {
+      // A seated body is drawn at the chair, so the eye would float elsewhere.
+      this.seated = null;
+      this.pendingSeat = null;
+      this.requestMouseLook();
+    } else {
+      this.lookPitch = 0;
+      this.releaseMouseLook();
+    }
+    if (this.playerRig) this.playerRig.group.visible = !active;
+  }
+
+  /** Drag and free-look share one clamp, so the head never flips. */
+  private lookBy(dx: number, dy: number, yaw: number, pitch: number) {
+    this.cameraYaw -= dx * yaw;
+    this.lookPitch = clamp(
+      this.lookPitch - dy * pitch,
+      -FIRST_PERSON_PITCH,
+      FIRST_PERSON_PITCH
+    );
+  }
+
+  private requestMouseLook() {
+    if (!this.renderer) return;
+    const canvas = this.renderer.domElement;
+    // Safari on iPad can have a wide viewport but no Pointer Lock API.
+    if (typeof canvas.requestPointerLock !== "function") return;
+    if (document.pointerLockElement === canvas) return;
+    const pending = canvas.requestPointerLock() as Promise<void> | undefined;
+    pending?.catch(() => {
+      // Denied during Chrome's cooldown after Esc: dragging still works.
+    });
+  }
+
+  private releaseMouseLook() {
+    if (
+      this.renderer &&
+      typeof document !== "undefined" &&
+      document.pointerLockElement === this.renderer.domElement
+    ) {
+      document.exitPointerLock();
+    }
   }
 
   setJoystick(x: number, y: number) {
@@ -1450,6 +1517,7 @@ export class OfficeEngine {
   dispose() {
     cancelAnimationFrame(this.raf);
     this.resizeObserver?.disconnect();
+    this.releaseMouseLook();
     window.removeEventListener("keydown", this.boundKeyDown);
     window.removeEventListener("keyup", this.boundKeyUp);
     window.removeEventListener("pointermove", this.boundPointerMove);
@@ -1464,6 +1532,8 @@ export class OfficeEngine {
       this.boundPointerLeave
     );
     this.renderer.domElement.removeEventListener("wheel", this.boundWheel);
+    document.removeEventListener("pointerlockchange", this.boundPointerLock);
+    document.removeEventListener("mousemove", this.boundMouseMove);
 
     this.tower?.dispose();
     if (this.tower) this.scene.remove(this.tower.group);
@@ -4640,6 +4710,14 @@ export class OfficeEngine {
 
   private onPointerDown(event: PointerEvent) {
     if (event.button !== 0) return;
+    if (this.firstPerson) {
+      this.pointerDown = true;
+      this.pointerDragged = false;
+      this.pointerStart = { x: event.clientX, y: event.clientY };
+      // Walking is off here, so a left click means "capture the mouse".
+      if (event.pointerType === "mouse") this.requestMouseLook();
+      return;
+    }
     this.pointerDown = true;
     if (this.view === "tower") this.setTowerHover(null);
     this.pointerDragged = false;
@@ -4647,6 +4725,27 @@ export class OfficeEngine {
     this.updatePointer(event);
     if (this.editState.active && (this.ghostMesh || this.editState.movingId)) {
       this.updateGhostPosition();
+    }
+  }
+
+  private onPointerLockChange() {
+    const locked = document.pointerLockElement === this.renderer.domElement;
+    // A request can resolve after first person has already been left. Release
+    // that late lock instead of trapping the cursor in the third-person view.
+    if (locked && !this.firstPerson) {
+      document.exitPointerLock();
+      return;
+    }
+    this.callbacks.onMouseLook?.(locked);
+  }
+
+  /** Pointer lock reports relative movement on `document`, not the canvas. */
+  private onMouseMove(event: MouseEvent) {
+    if (
+      this.firstPerson &&
+      document.pointerLockElement === this.renderer.domElement
+    ) {
+      this.lookBy(event.movementX, event.movementY, MOUSE_LOOK, MOUSE_LOOK);
     }
   }
 
@@ -4681,8 +4780,12 @@ export class OfficeEngine {
     const dy = event.clientY - this.pointerStart.y;
     if (Math.abs(dx) + Math.abs(dy) > 5) this.pointerDragged = true;
     if (this.pointerDragged && !this.editState.active) {
-      this.cameraYaw -= dx * 0.006;
-      this.cameraPitch = clamp(this.cameraPitch - dy * 0.004, 0.45, 1.2);
+      if (this.firstPerson) {
+        this.lookBy(dx, dy, 0.006, 0.004);
+      } else {
+        this.cameraYaw -= dx * 0.006;
+        this.cameraPitch = clamp(this.cameraPitch - dy * 0.004, 0.45, 1.2);
+      }
       this.pointerStart = { x: event.clientX, y: event.clientY };
     }
     if (this.ghostMesh || this.editState.movingId) {
@@ -4697,6 +4800,8 @@ export class OfficeEngine {
     const wasDrag = this.pointerDragged;
     this.pointerDragged = false;
     if (wasDrag) return;
+    // Click-to-walk and seat clicks belong to the third-person floor view.
+    if (this.firstPerson) return;
     this.updatePointer(event);
 
     if (this.view === "tower") {
@@ -4768,6 +4873,8 @@ export class OfficeEngine {
 
   private onWheel(event: WheelEvent) {
     event.preventDefault();
+    // Zoom belongs to the orbit camera; the eye keeps a fixed field of view.
+    if (this.firstPerson) return;
     if (this.view === "tower") {
       this.towerPointer = { x: event.clientX, y: event.clientY };
       this.setTowerHover(null);
@@ -5425,6 +5532,24 @@ export class OfficeEngine {
       return;
     }
 
+    if (this.firstPerson) {
+      // No lerp: an eye that trails the body reads as motion sickness.
+      const cos = Math.cos(this.lookPitch);
+      this.cameraPosition.set(
+        this.playerPosition.x,
+        1.66,
+        this.playerPosition.z
+      );
+      this.camera.position.copy(this.cameraPosition);
+      this.cameraTarget.set(
+        this.playerPosition.x - Math.sin(this.cameraYaw) * cos,
+        1.66 + Math.sin(this.lookPitch),
+        this.playerPosition.z - Math.cos(this.cameraYaw) * cos
+      );
+      this.camera.lookAt(this.cameraTarget);
+      return;
+    }
+
     const focus = new THREE.Vector3(
       this.playerPosition.x,
       1.25,
@@ -5445,7 +5570,10 @@ export class OfficeEngine {
 
   private updateWallOcclusion(dt: number) {
     const following =
-      this.view === "floor" && !this.cinematic && this.playerRig;
+      this.view === "floor" &&
+      !this.cinematic &&
+      !this.firstPerson &&
+      this.playerRig;
     const targets: THREE.Vector3[] = [];
     if (following) {
       // Sample the body as well as the head: a low partition can hide the legs

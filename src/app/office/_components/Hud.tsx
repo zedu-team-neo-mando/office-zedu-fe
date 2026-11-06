@@ -9,6 +9,7 @@ import {
   ChevronUp,
   Compass,
   DoorOpen,
+  Eye,
   HelpCircle,
   LogOut,
   Map,
@@ -52,10 +53,13 @@ interface HudProps {
   chatOpen: boolean;
   editorOpen: boolean;
   isMobile: boolean;
+  firstPerson: boolean;
+  mouseLook: boolean;
   mapOpen: boolean;
   /** Rooms known to be at capacity, such as an occupied Focus pod. */
   fullRoomIds?: ReadonlySet<string>;
   onToggleMap: () => void;
+  onToggleFirstPerson: () => void;
   onOpenDirectory: () => void;
   onOpenAvatar: () => void;
   onOpenTower: () => void;
@@ -93,9 +97,12 @@ export default function Hud({
   chatOpen,
   editorOpen,
   isMobile,
+  firstPerson,
+  mouseLook,
   mapOpen,
   fullRoomIds,
   onToggleMap,
+  onToggleFirstPerson,
   onOpenDirectory,
   onOpenAvatar,
   onOpenTower,
@@ -118,6 +125,12 @@ export default function Hud({
 
   return (
     <>
+      {firstPerson && <div className="office-crosshair" aria-hidden="true" />}
+
+      {firstPerson && !mouseLook && !isMobile && (
+        <div className="office-look-hint">Click to look · Esc to exit</div>
+      )}
+
       <header className="pointer-events-none absolute left-3 right-3 top-3 z-30 flex items-start justify-between gap-2 sm:left-5 sm:right-5 sm:top-5">
         <div className="pointer-events-auto flex min-w-0 items-center gap-2.5 sm:gap-3">
           <div className="office-glass flex items-center gap-2.5 rounded-2xl px-3 py-2 sm:px-3.5">
@@ -353,7 +366,7 @@ export default function Hud({
             <span className="mx-1 h-3 w-px bg-white/10" />
             <span className="office-kbd">Shift</span> run
             <span className="mx-1 h-3 w-px bg-white/10" />
-            click floor to walk
+            {firstPerson ? "click to look" : "click floor to walk"}
             <span className="mx-1 h-3 w-px bg-white/10" />
             <span className="office-kbd">B</span> furnish
           </div>
@@ -366,6 +379,19 @@ export default function Hud({
           isMobile ? "bottom-44" : "bottom-4 sm:bottom-5"
         )}
       >
+        {!isMobile && (
+          <button
+            type="button"
+            className="office-icon-button !h-11 !w-11 !rounded-2xl"
+            onClick={onToggleFirstPerson}
+            data-active={firstPerson}
+            aria-label="Toggle first-person view"
+            aria-pressed={firstPerson}
+            title="First-person view (V)"
+          >
+            <Eye className="h-5 w-5" />
+          </button>
+        )}
         <button
           type="button"
           className="office-icon-button relative !h-11 !w-11 !rounded-2xl"

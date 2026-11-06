@@ -421,6 +421,8 @@ export default function OfficeDemo({
   const [fading, setFading] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [firstPerson, setFirstPerson] = useState(false);
+  const [mouseLook, setMouseLook] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
@@ -629,6 +631,7 @@ export default function OfficeDemo({
     tourStep,
     saveState,
     isMobile,
+    firstPerson,
   });
   stateRef.current = {
     phase,
@@ -657,6 +660,7 @@ export default function OfficeDemo({
     tourStep,
     saveState,
     isMobile,
+    firstPerson,
   };
 
   const schedule = (fn: () => void, ms: number) => {
@@ -697,6 +701,7 @@ export default function OfficeDemo({
           },
           onDoorProximity: (roomId) =>
             handlersRef.current?.onDoorProximity?.(roomId),
+          onMouseLook: setMouseLook,
         },
         {
           isMobile: mobile,
@@ -852,11 +857,18 @@ export default function OfficeDemo({
       }
       const state = stateRef.current;
       if (event.key === "Escape") {
+        // The browser owns this press while the mouse is captured; cancelling
+        // it could swallow the unlock.
+        if (document.pointerLockElement) return;
         event.preventDefault();
         // The tower owns the viewport, so Esc always brings the floor back
         // before it starts closing panels.
         if (state.towerOpen) {
           closeTower();
+          return;
+        }
+        if (state.firstPerson) {
+          exitFirstPerson();
           return;
         }
         closeTopLayer();
@@ -886,12 +898,43 @@ export default function OfficeDemo({
       } else if (key === "m") {
         event.preventDefault();
         setMapOpen((value) => !value);
+      } else if (key === "v") {
+        // Holding the key must not strobe between the two cameras.
+        if (event.repeat) return;
+        event.preventDefault();
+        toggleFirstPerson();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Chat, the furniture editor and the tower all cover or replace the floor,
+  // so first person cannot stay on behind them.
+  useEffect(() => {
+    if (
+      chatOpen ||
+      editorActive ||
+      towerOpen ||
+      zoeOpen ||
+      directoryOpen ||
+      onboardingOpen ||
+      avatarOpen ||
+      tourStep !== null
+    )
+      exitFirstPerson();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    chatOpen,
+    editorActive,
+    towerOpen,
+    zoeOpen,
+    directoryOpen,
+    onboardingOpen,
+    avatarOpen,
+    tourStep,
+  ]);
 
   useEffect(() => {
     const timers = timersRef.current;
@@ -1487,6 +1530,41 @@ export default function OfficeDemo({
     pendingTeleportRef.current = null;
   }
 
+  // ------------------------------------------------------------ view controls
+
+  /**
+   * First person is a view, not a place: anything that covers the floor or
+   * moves the body ends it, so the two cameras never fight over the frame.
+   */
+  function setFirstPersonView(next: boolean) {
+    setFirstPerson(next);
+    engineRef.current?.setFirstPerson(next);
+  }
+
+  function toggleFirstPerson() {
+    const state = stateRef.current;
+    // The eye button is hidden on mobile, so V must not open the desktop view.
+    // Keep the exit path available if first person is already active.
+    if (state.isMobile && !state.firstPerson) return;
+    // A panel needs the pointer; capturing it behind one traps the cursor.
+    if (
+      state.chatOpen ||
+      state.editorActive ||
+      state.towerOpen ||
+      state.zoeOpen ||
+      state.directoryOpen ||
+      state.onboardingOpen ||
+      state.avatarOpen ||
+      state.tourStep !== null
+    )
+      return;
+    setFirstPersonView(!state.firstPerson);
+  }
+
+  function exitFirstPerson() {
+    if (stateRef.current.firstPerson) setFirstPersonView(false);
+  }
+
   // ---------------------------------------------------------------- the tower
 
   function openTower() {
@@ -1569,6 +1647,7 @@ export default function OfficeDemo({
     schedule(() => {
       telemetry.towerClosed(false);
       engine.setView("floor");
+      exitFirstPerson();
       engine.focusRoom(targetId);
       setRoomId(targetId);
       setActiveFloor(floorIndex);
@@ -2074,6 +2153,7 @@ export default function OfficeDemo({
   function openAvatar() {
     setAvatarDraft(avatar);
     setAvatarOpen(true);
+    exitFirstPerson();
     setZoeOpen(false);
     setChatOpen(false);
     setDirectoryOpen(false);
@@ -2414,6 +2494,7 @@ export default function OfficeDemo({
     }
     const engine = engineRef.current;
     if (!engine) return;
+    exitFirstPerson();
     closeEditor();
     setDirectoryOpen(false);
     setZoeOpen(false);
@@ -2549,9 +2630,12 @@ export default function OfficeDemo({
             chatOpen={chatOpen}
             editorOpen={editorActive}
             isMobile={isMobile}
+            firstPerson={firstPerson}
+            mouseLook={mouseLook}
             mapOpen={mapOpen}
             fullRoomIds={fullRoomIds}
             onToggleMap={() => setMapOpen((value) => !value)}
+            onToggleFirstPerson={toggleFirstPerson}
             onOpenDirectory={openDirectory}
             onOpenAvatar={openAvatar}
             onOpenTower={openTower}
