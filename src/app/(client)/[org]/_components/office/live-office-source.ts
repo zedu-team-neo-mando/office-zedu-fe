@@ -435,6 +435,8 @@ export class LiveOfficeSource implements OfficeSource {
   private channelRoomMap: Record<string, string> = {};
   private dmOfficeMap: Record<string, string> = {};
   private dmRoomMap: Record<string, string> = {};
+  /** Conversations being started right now, so a double click makes one DM. */
+  private openingConversations = new Map<string, Promise<OfficeRoom | null>>();
   private floorByRoom: Record<string, number> = {};
   private selfName = "Colleague";
   /** The room presence subscription that is open right now, if any. */
@@ -1205,5 +1207,101 @@ export class LiveOfficeSource implements OfficeSource {
       return this.dmRoomMap[roomId] ?? null;
     }
     return null;
+  }
+
+  /**
+   * Opens the conversation with one person, creating the DM if it does not
+   * exist yet.
+   *
+   * Zedu chat has one rule for a name: clicking it starts the conversation. The
+   * office follows the same rule, and that matters beyond the panel, because the
+   * server only admits a visitor to a private office when a DM with its owner
+   * exists. Creating the DM here is therefore what unlocks the office; the
+   * server's admission rule is left exactly as it is.
+   *
+   * Concurrent openings of the same person share one request, so a double click
+   * cannot start two conversations.
+   */
+  async openConversation(memberUserId: string): Promise<OfficeRoom | null> {
+    const room = this.personalRoomFor(memberUserId);
+    if (!room) return null;
+
+    const existing = this.dmRoomMap[room.id];
+    if (existing) {
+      this.unlockPersonalRoom(room.id);
+      return this.rooms.find((candidate) => candidate.id === room.id) ?? null;
+    }
+
+    const inFlight = this.openingConversations.get(memberUserId);
+    if (inFlight) return inFlight;
+
+    const opening = this.createConversation(memberUserId, room.id).finally(() =>
+      this.openingConversations.delete(memberUserId)
+    );
+    this.openingConversations.set(memberUserId, opening);
+    return opening;
+  }
+
+  private async createConversation(
+    memberUserId: string,
+    roomId: string
+  ): Promise<OfficeRoom> {
+    const response = await PostRequest(`/organisations/${this.orgId}/dms`, {
+      chat_type: "user",
+      participant_id: memberUserId,
+    });
+    const status = response?.status ?? response?.response?.status;
+    const channelId = response?.data?.data?.channel_id;
+
+    if (status !== 200 && status !== 201) {
+      throw new Error(
+        response?.data?.message ??
+          "The conversation could not be started right now."
+      );
+    }
+    if (!channelId) {
+      throw new Error("The conversation could not be started right now.");
+    }
+
+    this.dmOfficeMap[channelId] = roomId;
+    this.dmRoomMap[roomId] = channelId;
+    this.unlockPersonalRoom(roomId);
+
+    const room = this.rooms.find((candidate) => candidate.id === roomId);
+    if (!room) {
+      throw new Error("That office is not part of this building.");
+    }
+    return room;
+  }
+
+  /** The private office that belongs to one person, if the roster has one. */
+  private personalRoomFor(memberUserId: string): OfficeRoom | undefined {
+    const member = this.members.find(
+      (candidate) => candidate.userId === memberUserId
+    );
+    const byRoomId = member
+      ? this.rooms.find((candidate) => candidate.id === member.roomId)
+      : undefined;
+    return (
+      byRoomId ??
+      this.rooms.find(
+        (candidate) =>
+          candidate.kind === "personal" && candidate.refId === memberUserId
+      )
+    );
+  }
+
+  /**
+   * A private office with a conversation is visitable and readable. Rooms are
+   * replaced rather than mutated so the scene, which compares room lists, sees
+   * the change and rebuilds the door.
+   */
+  private unlockPersonalRoom(roomId: string) {
+    this.rooms = this.rooms.map((room) =>
+      room.id === roomId ? { ...room, locked: false, chat: true } : room
+    );
+    this.members = this.members.map((member) =>
+      member.roomId === roomId ? { ...member, canVisit: true } : member
+    );
   }
 }
