@@ -8,9 +8,9 @@
  */
 import { tokenizeMessageText } from "../../../src/app/(client)/[org]/_components/ChannelMessage/tokenize-message-text";
 
-const ORG = "11111111-1111-4111-8111-111111111111";
+const ORG = "mock-org-email-mentions";
 const SLUG = "testorg";
-const CHANNEL = "22222222-2222-4222-8222-222222222222";
+const CHANNEL = "mock-channel-email-mentions";
 const USER = { id: "user-1", user_id: "user-1", username: "tester" };
 
 // Without NEXT_PUBLIC_GTM_SCRIPT_URL the analytics <Script> loads the page's

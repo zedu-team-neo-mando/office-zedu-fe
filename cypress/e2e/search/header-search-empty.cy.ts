@@ -8,7 +8,7 @@
  */
 export {};
 
-const ORG = "11111111-1111-4111-8111-111111111111";
+const ORG = "mock-org-header-search";
 const SLUG = "testorg";
 const SEARCH = "Search messages and people...";
 

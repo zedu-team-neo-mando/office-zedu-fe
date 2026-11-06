@@ -7,7 +7,7 @@ useDefault = true
 
 [[rules]]
 id = "hardcoded-source-secret"
-description = "High-entropy string assigned in source, regardless of variable name"
+description = "High-entropy string assigned in source, excluding common UUID/test fixture IDs"
 regex = '''(?i)(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*['"]([A-Za-z0-9+=_.-]{20,})['"]'''
 entropy = 3.5
 keywords = [
@@ -17,10 +17,15 @@ keywords = [
 ]
 
 [allowlist]
-description = "Allow known test fixtures and generated files"
+description = "Allow known test fixtures, generated files, and UUID-like fixture IDs"
 paths = [
   '''integration\.json''',
   '''(?:^|/)\.github/''',
+  '''(?:^|/)cypress/''',
+]
+regexes = [
+  '''(?i)(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*['"][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}['"]''',
+  '''(?i)(?:const|let|var)\s+[A-Za-z_][\w]*\s*=\s*['"][0-9a-fA-F]{32}['"]''',
 ]
 regexes = [
   # localStorage key names used by the demo office source (KEY_LAYOUTS /

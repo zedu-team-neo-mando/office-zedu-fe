@@ -37,7 +37,7 @@ const MessageEnter = Extension.create({
 const SLASH_COMMAND_ICON = "/image/TelexIcon.svg";
 const CHANNEL_MENTION_ICON = "/images/megaphone.png";
 /** Backend id for @channel (notify everyone in this channel). */
-export const CHANNEL_MENTION_ID = "00000000-0000-0000-0000-000000000000";
+export const CHANNEL_MENTION_ID = "system-channel-mention";
 
 const createChannelMentionItem = () => ({
   id: CHANNEL_MENTION_ID,

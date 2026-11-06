@@ -17,9 +17,9 @@ import {
   shouldShowNotificationNotice,
 } from "../../../src/app/(client)/[org]/_components/notification-permission";
 
-const ORG = "11111111-1111-4111-8111-111111111111";
+const ORG = "mock-org-notifications";
 const SLUG = "testorg";
-const CHANNEL = "22222222-2222-4222-8222-222222222222";
+const CHANNEL = "mock-channel-notifications";
 const NOTICE = "Desktop notifications are blocked.";
 const DISMISS = '[aria-label="Dismiss notification notice"]';
 const EDITOR = ".ProseMirror";

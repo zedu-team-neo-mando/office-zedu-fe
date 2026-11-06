@@ -6,7 +6,7 @@
  *   CYPRESS_baseUrl=http://localhost:3000 \
  *   pnpm cypress run --spec cypress/e2e/buzzs/host-name.cy.ts
  */
-const ORG = "11111111-1111-4111-8111-111111111111";
+const ORG = "mock-org-host-name";
 const SLUG = "testorg";
 
 // Without NEXT_PUBLIC_GTM_SCRIPT_URL the analytics <Script> loads the page's
