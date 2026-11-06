@@ -148,6 +148,7 @@ test("Back to tower switches the existing office view without leaving it", () =>
   const createOpenTower = compileFunction(
     functionSource(sourceAst("OfficeDemo.tsx"), "openTower"),
     [
+      "setChatTargetId",
       "engineRef",
       "setActiveFloor",
       "setTowerFocus",
@@ -165,6 +166,7 @@ test("Back to tower switches the existing office view without leaving it", () =>
     focusTowerFloor: (floor) => calls.push(["focusTowerFloor", floor]),
   };
   const openTower = createOpenTower(
+    (target) => calls.push(["chatTarget", target]),
     { current: engine },
     (floor) => calls.push(["activeFloor", floor]),
     (floor) => calls.push(["towerFocus", floor]),
@@ -177,6 +179,7 @@ test("Back to tower switches the existing office view without leaving it", () =>
   openTower();
 
   assert.deepEqual(calls, [
+    ["chatTarget", null],
     ["activeFloor", 3],
     ["view", "tower"],
     ["focusTowerFloor", null],

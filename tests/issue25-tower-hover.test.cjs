@@ -29,6 +29,14 @@ const { OfficeEngine } = compile(source, {
   "../office-data": compile(
     fs.readFileSync(path.join(folder, "office-data.ts"), "utf8")
   ),
+  "../office-layout": compile(
+    fs.readFileSync(path.join(folder, "office-layout.ts"), "utf8"),
+    {
+      "./office-data": compile(
+        fs.readFileSync(path.join(folder, "office-data.ts"), "utf8")
+      ),
+    }
+  ),
   "./palette": compile(
     fs.readFileSync(path.join(folder, "engine/palette.ts"), "utf8")
   ),
@@ -85,6 +93,7 @@ function harness(t) {
     pointerNdc: new THREE.Vector2(),
     towerPointer: null,
     towerHover: null,
+    occlusionWalls: [],
     camera: new THREE.PerspectiveCamera(),
     cameraDistance: 10,
     clock: { getDelta: () => 0.016, elapsedTime: 1 },
