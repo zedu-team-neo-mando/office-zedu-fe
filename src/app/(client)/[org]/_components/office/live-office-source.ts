@@ -1246,7 +1246,9 @@ export class LiveOfficeSource implements OfficeSource {
     memberUserId: string,
     roomId: string
   ): Promise<OfficeRoom> {
-    const response = await PostRequest(`/organisations/${this.orgId}/dms`, {
+    // BuzzRequest, not PostRequest: the office shows its own error toast, and
+    // PostRequest would show a second one for the same failure.
+    const response = await BuzzRequest(`/organisations/${this.orgId}/dms`, {
       chat_type: "user",
       participant_id: memberUserId,
     });
@@ -1254,8 +1256,11 @@ export class LiveOfficeSource implements OfficeSource {
     const channelId = response?.data?.data?.channel_id;
 
     if (status !== 200 && status !== 201) {
+      // A failed request comes back as the axios error, whose server message
+      // sits under `response`.
       throw new Error(
         response?.data?.message ??
+          response?.response?.data?.message ??
           "The conversation could not be started right now."
       );
     }

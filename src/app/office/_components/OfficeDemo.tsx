@@ -38,6 +38,7 @@ import { OfficeEntryError, isRoomFullError } from "./office-entry";
 import { useOfficeTelemetry } from "./use-office-telemetry";
 import type {
   OfficeOccupant,
+  OfficeRoom,
   OfficeSource,
   OfficeZoeContext,
 } from "~/types/office";
@@ -348,6 +349,16 @@ export default function OfficeDemo({
   const [towerOpen, setTowerOpen] = useState(false);
   const [towerFocus, setTowerFocus] = useState<number | null>(null);
   const openedInitialTowerRef = useRef(false);
+  /**
+   * The tower pick that is waiting for its conversation to start. Any later
+   * tower action bumps `token`, so a late answer cannot undo it; `enter`
+   * remembers a second click on the same office made while it was waiting.
+   */
+  const towerPickRef = useRef<{
+    token: number;
+    roomId: string | null;
+    enter: boolean;
+  }>({ token: 0, roomId: null, enter: false });
   const [activeFloor, setActiveFloor] = useState(0);
   const floorRooms = useMemo(
     () => rooms.filter((room) => (room.floorIndex ?? 0) === activeFloor),
@@ -1489,7 +1500,17 @@ export default function OfficeDemo({
 
   // ---------------------------------------------------------------- the tower
 
+  /** Drops any tower pick still waiting on its conversation. */
+  function cancelTowerPick() {
+    towerPickRef.current = {
+      token: towerPickRef.current.token + 1,
+      roomId: null,
+      enter: false,
+    };
+  }
+
   function openTower() {
+    cancelTowerPick();
     setChatTargetId(null);
     const engine = engineRef.current;
     if (!engine) return;
@@ -1511,6 +1532,7 @@ export default function OfficeDemo({
    * new room-entry callback.
    */
   function closeTower() {
+    cancelTowerPick();
     engineRef.current?.setView("floor");
     setTowerOpen(false);
     setTowerHover(null);
@@ -1521,6 +1543,7 @@ export default function OfficeDemo({
   }
 
   function showWholeTower() {
+    cancelTowerPick();
     engineRef.current?.focusTowerFloor(null);
     setTowerFocus(null);
     setTowerPreview(null);
@@ -1540,6 +1563,7 @@ export default function OfficeDemo({
       return;
     }
 
+    cancelTowerPick();
     engine.focusTowerFloor(floorIndex);
     setTowerFocus(floorIndex);
     setTowerPreview(null);
@@ -1553,11 +1577,18 @@ export default function OfficeDemo({
    * the storey is rebuilt in 3D, and the room's last messages are spoken the
    * moment the player lands so the place does not arrive silent.
    */
-  function diveIntoRoom(targetId: string, floorIndex: number) {
+  function diveIntoRoom(
+    targetId: string,
+    floorIndex: number,
+    // The room as it is now, when the caller has just unlocked it and this
+    // render's roomById still has the locked copy.
+    room?: OfficeRoom
+  ) {
     const engine = engineRef.current;
     if (!engine) return;
+    cancelTowerPick();
 
-    const target = roomById[targetId];
+    const target = room ?? roomById[targetId];
     if (target?.locked) {
       engine.pulseOffice(targetId, floorIndex);
       showInfo("Locked office", target.description);
@@ -1607,12 +1638,26 @@ export default function OfficeDemo({
    * click on the same room walks in.
    */
   function pickTowerRoom(office: { roomId: string; floorIndex: number }) {
-    void readTowerRoom(office);
+    readTowerRoom(office).catch(() => {
+      showError("Couldn't open that office", "Please try again.");
+    });
   }
 
+  /**
+   * One tower pick: frames the office and opens its conversation, starting the
+   * DM first when the office is locked only for want of one.
+   */
   async function readTowerRoom(office: { roomId: string; floorIndex: number }) {
     const engine = engineRef.current;
     if (!engine) return;
+
+    // A second click on an office still waiting for its DM: walk in once the
+    // conversation exists instead of reading the room twice.
+    if (towerPickRef.current.roomId === office.roomId) {
+      towerPickRef.current.enter = true;
+      return;
+    }
+    cancelTowerPick();
 
     let target = roomById[office.roomId];
 
@@ -1630,8 +1675,21 @@ export default function OfficeDemo({
       engine.pulseOffice(office.roomId, office.floorIndex);
       engine.focusTowerRoom(office.roomId);
       setTowerFocus(office.floorIndex);
+      const token = towerPickRef.current.token;
+      towerPickRef.current.roomId = office.roomId;
+      // False once the visitor has moved on: a late answer, good or bad, must
+      // not change the tower or chat they are looking at now.
+      const stillCurrent = () => towerPickRef.current.token === token;
       try {
         const opened = await source.openConversation(target.ownerId);
+        if (!stillCurrent()) return;
+        const enter = towerPickRef.current.enter;
+        towerPickRef.current.roomId = null;
+        towerPickRef.current.enter = false;
+        if (opened && enter && !opened.locked) {
+          diveIntoRoom(office.roomId, office.floorIndex, opened);
+          return;
+        }
         if (!opened) {
           setTowerPreview(null);
           setChatOpen(false);
@@ -1640,6 +1698,8 @@ export default function OfficeDemo({
         }
         target = opened;
       } catch (error) {
+        if (!stillCurrent()) return;
+        cancelTowerPick();
         setTowerPreview(null);
         setChatOpen(false);
         showError(
@@ -2714,6 +2774,7 @@ export default function OfficeDemo({
           conversations={existingConversations}
           onChooseConversation={openConversation}
           onClose={() => {
+            cancelTowerPick();
             setChatOpen(false);
             setTowerPreview(null);
             engineRef.current?.focusTowerFloor(null);
