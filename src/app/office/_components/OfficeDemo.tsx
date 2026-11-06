@@ -17,7 +17,7 @@ import {
 } from "./Panels";
 import ZoeDialog from "./ZoeDialog";
 import { TowerView } from "./TowerView";
-import type { TowerOffice, type TowerOccupant } from "./engine/tower-scene";
+import type { TowerOffice, TowerOccupant } from "./engine/tower-scene";
 import { normalizeOccupant } from "../../(client)/[org]/_components/office/live-office-source";
 import { Onboarding, TourOverlay, type TourStep } from "./Onboarding";
 import {
@@ -470,8 +470,18 @@ export default function OfficeDemo({
   // owner is inside it, and the search only ever matches people. The demo
   // adds the directory-only storeys that fill the building out to ten floors.
   const towerOffices = useMemo<TowerOffice[]>(() => {
+    // The occupancy read is source-agnostic, so both branches attach it the
+    // same way. The demo has no request of its own but still knows where every
+    // seeded person stands, so its cells show faces too.
+    const attachOccupants = (offices: TowerOffice[]) =>
+      offices.map((office) => {
+        const occupants = occupantsByRoom[office.roomId] ?? [];
+        if (!occupants.length) return office;
+        return { ...office, occupants };
+      });
+
     if (source.mode === "demo") {
-      return demoTowerOffices(rooms, presence);
+      return attachOccupants(demoTowerOffices(rooms, presence));
     }
 
     // The tower is a directory of the whole organisation. The member roster
@@ -517,14 +527,7 @@ export default function OfficeDemo({
         interactive: !room.locked,
       }));
 
-    return [...shared, ...people].map((office) => {
-      const occupants = occupantsByRoom[office.roomId] ?? [];
-      if (!occupants.length) return office;
-      return {
-        ...office,
-        occupants,
-      };
-    });
+    return attachOccupants([...shared, ...people]);
   }, [source.mode, source.members, rooms, presence, selfId, occupantsByRoom]);
 
   const isShared = Boolean(currentRoom && currentRoom.kind !== "personal");
@@ -1078,11 +1081,27 @@ export default function OfficeDemo({
     let occupants: OfficeOccupant[] = [];
     if (source.mode === "live") {
       const response = await GetRequest("/office/occupancy");
-      const body = response?.data ?? response;
-      const list = Array.isArray(body) ? body : (body?.occupants ?? []);
+      // GetRequest returns the error object instead of throwing. Keep the
+      // roster that is already on screen rather than blanking the tower on a
+      // failed poll.
+      const status = (response as { status?: number } | undefined)?.status;
+      if (typeof status !== "number" || status < 200 || status >= 300) return;
+
+      // Office routes answer with the usual { status, message, data } envelope,
+      // so the roster is `data.data`, with a bare array or `occupants` field
+      // accepted as well.
+      const envelope = (response as { data?: { data?: unknown } })?.data;
+      const payload = envelope?.data ?? envelope;
+      const list: unknown[] = Array.isArray(payload)
+        ? payload
+        : ((payload as { occupants?: unknown[] } | undefined)?.occupants ?? []);
       occupants = list
-        .map((item: any) => normalizeOccupant(item, item.roomId ?? ""))
-        .filter((occ): occ is OfficeOccupant => Boolean(occ));
+        .map((item) =>
+          normalizeOccupant(item, (item as { roomId?: string })?.roomId ?? "")
+        )
+        .filter((occ: OfficeOccupant | null): occ is OfficeOccupant =>
+          Boolean(occ)
+        );
     } else {
       occupants = demoOccupants();
     }

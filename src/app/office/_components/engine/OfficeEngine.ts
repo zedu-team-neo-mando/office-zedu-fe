@@ -12,14 +12,17 @@ import {
   type FurnitureItem,
   type OfficeRoom,
   type PresenceStatus,
-  type TowerOccupant,
   furnitureAabb,
   validatePlacement,
 } from "../office-data";
 import { floorLayoutItems, roomLayoutItems } from "../office-layout";
 import { outsideDoor } from "../office-entry";
 import type { OfficeFloor, OfficeOccupant } from "~/types/office";
-import { TowerScene, type TowerOffice } from "./tower-scene";
+import {
+  TowerScene,
+  type TowerOffice,
+  type TowerOccupant,
+} from "./tower-scene";
 import { INK_CSS, PALETTE, PAPER_CSS } from "./palette";
 
 export interface EngineCallbacks {
@@ -676,24 +679,33 @@ export class OfficeEngine {
     }
   }
 
-  /** Refresh the standing occupants of every room, by room id. */
+  /**
+   * Refresh the standing occupants of every room, by room id. The scene keeps
+   * the office objects it was given, so a changed entry is replaced with a new
+   * object rather than mutated: `syncOccupants` compares the incoming list with
+   * the one still held in `cell.office`, and a mutation in place would make the
+   * two identical and skip the rebuild that redraws the faces.
+   */
   setTowerOccupants(occupantsByRoom: Record<string, TowerOccupant[]>) {
     if (!this.towerOffices.length) return;
     let changed = false;
-    for (const office of this.towerOffices) {
+    const nextOffices = this.towerOffices.map((office) => {
       const next = occupantsByRoom[office.roomId];
-      if (!next) continue;
+      if (!next) return office;
       const before = office.occupants;
       if (
         before?.length === next.length &&
         before.every((o, i) => o.userId === next[i].userId)
-      )
-        continue;
-      office.occupants = next;
+      ) {
+        return office;
+      }
       changed = true;
-    }
-    if (changed && this.view === "tower") {
-      this.tower?.setData(this.towerFloors, this.towerOffices);
+      return { ...office, occupants: next };
+    });
+    if (!changed) return;
+    this.towerOffices = nextOffices;
+    if (this.view === "tower") {
+      this.tower?.setData(this.towerFloors, nextOffices);
     }
   }
 
