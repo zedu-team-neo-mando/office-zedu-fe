@@ -27,6 +27,7 @@ import type {
   OfficeRoom,
   OfficeSource,
   OfficeZoeContext,
+  OfficeZoeHistoryMessage,
 } from "~/types/office";
 import { ROOMS } from "~/app/office/_components/office-data";
 import { entryErrorFromResponse } from "~/app/office/_components/office-entry";
@@ -655,7 +656,11 @@ export class LiveOfficeSource implements OfficeSource {
     ];
   }
 
-  async askZoe(question: string, context: OfficeZoeContext) {
+  async askZoe(
+    question: string,
+    context: OfficeZoeContext,
+    history: OfficeZoeHistoryMessage[] = []
+  ) {
     // Zoe is answered by the Next proxy route, which keeps the service token
     // on the server. The Go API has no /office/zoe endpoint.
     const token = localStorage.getItem("token") ?? "";
@@ -665,7 +670,9 @@ export class LiveOfficeSource implements OfficeSource {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(createZoeRequest(question, context, this.orgId)),
+      body: JSON.stringify(
+        createZoeRequest(question, context, this.orgId, history)
+      ),
     });
 
     if (!response.ok) {
