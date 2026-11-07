@@ -6,6 +6,7 @@ import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import { DataContext } from "~/store/GlobalState";
 import OfficeDemo from "~/app/office/_components/OfficeDemo";
 import { LiveOfficeSource, OfficeDisabledError } from "./live-office-source";
+import { exitToDesktop } from "./desktop-bridge";
 import { cn } from "~/lib/utils";
 import { useOfficeStatus } from "~/hooks/use-office-status";
 import { showInfo } from "~/components/toast/sonner";
@@ -146,7 +147,12 @@ export default function LiveOfficePage() {
         name: state?.user?.username ?? "You",
         role: state?.user?.title || state?.orgData?.user_role?.role_name || "",
       }}
-      onExit={() => router.push(`/${orgSlug}`)}
+      onExit={async () => {
+        // Inside Zedu Desktop, leaving closes the office and returns to the
+        // desktop app; in a browser it returns to the organisation's chat.
+        if (await exitToDesktop()) return;
+        router.push(`/${orgSlug}`);
+      }}
     />
   );
 }
