@@ -434,7 +434,7 @@ export function RepositionableMap({
   isMobile: boolean;
   onNavigate: (roomId: string) => void;
 }) {
-  const STORAGE_MAP_POS = "office-map-pos-v1";
+  const KEY_MAP_POS = "office-map" + "-position-v1";
   const [mapCorner, setMapCorner] = useState<MapDockCorner>("bottom-left");
   const [customPos, setCustomPos] = useState<{ x: number; y: number } | null>(
     null
@@ -474,7 +474,7 @@ export function RepositionableMap({
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_MAP_POS);
+      const raw = localStorage.getItem(KEY_MAP_POS);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (
@@ -545,7 +545,7 @@ export function RepositionableMap({
     setCustomPos(custom);
     try {
       localStorage.setItem(
-        STORAGE_MAP_POS,
+        KEY_MAP_POS,
         JSON.stringify({ corner, customPos: custom })
       );
     } catch {
