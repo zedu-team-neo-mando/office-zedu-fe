@@ -69,13 +69,16 @@ export default function DesktopSignIn() {
       const data = body?.data;
       const user = data?.user;
       const orgSlug = user?.current_organisation_slug;
-      // Everything stored below is checked first, so a short answer never
-      // leaves a half-written session or an "undefined" organisation.
+      // Everything stored below is checked first, as a non-empty string, so a
+      // short or odd answer never leaves a half-written session or an
+      // organisation of "undefined" or "[object Object]".
+      const isText = (value: unknown): value is string =>
+        typeof value === "string" && value.length > 0;
       if (
-        !data?.access_token ||
-        !orgSlug ||
-        !user?.email ||
-        !user?.current_org
+        !isText(data?.access_token) ||
+        !isText(orgSlug) ||
+        !isText(user?.email) ||
+        !isText(user?.current_org)
       ) {
         setFailure("The office could not sign you in.");
         return;
