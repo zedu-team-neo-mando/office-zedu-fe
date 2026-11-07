@@ -47,6 +47,9 @@ import {
 
 /** How often an open room re-reads zedu inside Zedu Desktop. */
 const ZEDU_CHAT_POLL_MS = 4000;
+/** First and longest wait before retrying a room's zedu setup that failed. */
+const ZEDU_SETUP_RETRY_MS = 2_000;
+const ZEDU_SETUP_RETRY_MAX_MS = 30_000;
 
 /** The API speaks two dimensions, the scene works in three. */
 function toSceneItem(item: OfficeApiItem): OfficeFurnitureItem {
@@ -1352,11 +1355,27 @@ export class LiveOfficeSource implements OfficeSource {
       stop = () => window.clearInterval(timer);
     };
 
-    start().catch(() => {
-      // The room still shows what fetchMessages read; it just stays quiet.
-    });
+    // A setup that throws, such as a dropped request while finding the zedu
+    // DM, is retried with growing delays while the room stays open, so the
+    // room does not stay silent after a brief outage.
+    let attempt = 0;
+    let retryTimer: number | undefined;
+    const setUp = () => {
+      start().catch(() => {
+        if (stopped) return;
+        const delay = Math.min(
+          ZEDU_SETUP_RETRY_MAX_MS,
+          ZEDU_SETUP_RETRY_MS * 2 ** attempt
+        );
+        attempt += 1;
+        retryTimer = window.setTimeout(setUp, delay);
+      });
+    };
+    setUp();
+
     return () => {
       stopped = true;
+      window.clearTimeout(retryTimer);
       stop?.();
     };
   }
