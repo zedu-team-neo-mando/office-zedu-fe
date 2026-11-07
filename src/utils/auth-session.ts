@@ -1,4 +1,5 @@
 import axios from "axios";
+import { isDesktopEmbed } from "~/app/(client)/[org]/_components/office/desktop-bridge";
 
 let isHandlingSessionExpiry = false;
 
@@ -36,7 +37,11 @@ export const handleSessionExpired = () => {
   isHandlingSessionExpiry = true;
 
   const currentFullUrl = `${window.location.pathname}${window.location.search}`;
-  const loginUrl = `/auth/login?redirect=${encodeURIComponent(currentFullUrl)}`;
+  // Inside Zedu Desktop there is no login page to show: signing in again
+  // through the desktop's zedu session renews the office one.
+  const loginUrl = isDesktopEmbed()
+    ? "/auth/desktop"
+    : `/auth/login?redirect=${encodeURIComponent(currentFullUrl)}`;
 
   localStorage.clear();
   window.location.href = loginUrl;

@@ -37,7 +37,10 @@ export default function RootLayout({
 
   useEffect(() => {
     const token = localStorage.getItem("token");
-    if (token) {
+    // The desktop sign-in replaces whatever office session the WebView holds,
+    // since the person signed in to desktop may have changed.
+    const isDesktopSignIn = window.location.pathname.endsWith("/auth/desktop");
+    if (token && !isDesktopSignIn) {
       const redirectPath = getLoggedInRedirectPath(orgSlug);
       if (redirectPath) {
         router.replace(redirectPath);
