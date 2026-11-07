@@ -46,17 +46,17 @@ test("Issue #124 - Repositionable and draggable building map", async (t) => {
     "persists map corner and custom drag position in localStorage",
     () => {
       assert.ok(
-        hudCode.includes('const KEY_MAP_POS = "office-map-position-v1";'),
-        "Should define office-map-position-v1 localStorage key"
+        hudCode.includes('const STORAGE_MAP_POS = "office-map-pos-v1";'),
+        "Should define office-map-pos-v1 localStorage key"
       );
       assert.match(
         hudCode,
-        /localStorage\.getItem\(\s*KEY_MAP_POS\s*\)/,
+        /localStorage\.getItem\(\s*STORAGE_MAP_POS\s*\)/,
         "Should read map position from localStorage"
       );
       assert.match(
         hudCode,
-        /localStorage\.setItem\(\s*KEY_MAP_POS,\s*JSON\.stringify/,
+        /localStorage\.setItem\(\s*STORAGE_MAP_POS,\s*JSON\.stringify/,
         "Should write map position to localStorage"
       );
     }
