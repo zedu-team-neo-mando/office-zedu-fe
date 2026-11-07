@@ -679,7 +679,14 @@ export function RepositionableMap({
 
     const mobileBottomRightClass = canFitAboveChatOnMobile
       ? "bottom-72"
-      : "top-28 lg:top-20";
+      : cn(
+          "top-28 lg:top-20",
+          // Clear the 44px control column when it reaches the map header.
+          typeof window !== "undefined" &&
+            window.innerHeight > 112 + 176 &&
+            window.innerHeight < 112 + 56 + 272 &&
+            "right-16 sm:right-[4.5rem]"
+        );
 
     switch (corner) {
       case "bottom-left":
