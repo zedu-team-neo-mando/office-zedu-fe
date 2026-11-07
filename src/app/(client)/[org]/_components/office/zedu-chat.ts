@@ -126,7 +126,9 @@ export async function resolveZeduDm(
 }
 
 let zeduRealtime: { key: string; client: Centrifuge } | null = null;
-const listenerCounts = new Map<string, number>();
+// Listeners per channel on the current client. A new client gets a new map,
+// so a cleanup from the previous client never changes the new one's counts.
+let listenerCounts = new Map<string, number>();
 
 /**
  * One connection to zedu-be's Centrifugo, separate from the office's own,
@@ -137,7 +139,7 @@ function zeduCentrifuge(session: ZeduSession & { connectUrl: string }) {
   if (zeduRealtime?.key === key) return zeduRealtime.client;
 
   zeduRealtime?.client.disconnect();
-  listenerCounts.clear();
+  listenerCounts = new Map<string, number>();
   const client = new Centrifuge(session.connectUrl, {
     getToken: async () =>
       (await zeduRequest<{ token: string }>(session, "/token/connection"))
@@ -161,6 +163,7 @@ export function subscribeZeduChannel(
 ): (() => void) | null {
   if (!session.connectUrl) return null;
   const client = zeduCentrifuge({ ...session, connectUrl: session.connectUrl });
+  const counts = listenerCounts;
 
   const subscription =
     client.getSubscription(channelId) ??
@@ -178,17 +181,17 @@ export function subscribeZeduChannel(
   const onPublication = (ctx: PublicationContext) => onData(ctx.data);
 
   subscription.on("publication", onPublication);
-  listenerCounts.set(channelId, (listenerCounts.get(channelId) ?? 0) + 1);
+  counts.set(channelId, (counts.get(channelId) ?? 0) + 1);
   subscription.subscribe();
 
   return () => {
     subscription.off("publication", onPublication);
-    const remaining = (listenerCounts.get(channelId) ?? 1) - 1;
+    const remaining = (counts.get(channelId) ?? 1) - 1;
     if (remaining > 0) {
-      listenerCounts.set(channelId, remaining);
+      counts.set(channelId, remaining);
       return;
     }
-    listenerCounts.delete(channelId);
+    counts.delete(channelId);
     subscription.unsubscribe();
     client.removeSubscription(subscription);
   };
