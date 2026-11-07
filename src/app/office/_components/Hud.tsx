@@ -435,6 +435,30 @@ export function RepositionableMap({
     startTop: number;
   } | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapHeightRef = useRef(220);
+  const [, setMapHeight] = useState(220);
+
+  useEffect(() => {
+    if (!mapOpen) return;
+    const container = mapContainerRef.current;
+    if (!container) return;
+
+    const updateMapHeight = () => {
+      const h = container.offsetHeight;
+      mapHeightRef.current = h;
+      setMapHeight(h);
+      setCustomPos((prev) => {
+        if (!prev) return null;
+        const maxY = Math.max(56, window.innerHeight - h - 12);
+        return { ...prev, y: Math.max(56, Math.min(prev.y, maxY)) };
+      });
+    };
+
+    updateMapHeight();
+    const observer = new ResizeObserver(updateMapHeight);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [mapOpen]);
 
   useEffect(() => {
     try {
@@ -455,7 +479,7 @@ export function RepositionableMap({
           typeof parsed.customPos.y === "number"
         ) {
           const mapW = isMobile ? 190 : 248;
-          const mapH = 220;
+          const mapH = mapHeightRef.current;
           const x = Math.max(
             12,
             Math.min(parsed.customPos.x, window.innerWidth - mapW - 12)
@@ -474,10 +498,15 @@ export function RepositionableMap({
 
   useEffect(() => {
     const handleResize = () => {
+      const container = mapContainerRef.current;
+      if (container) {
+        mapHeightRef.current = container.offsetHeight;
+        setMapHeight(container.offsetHeight);
+      }
       setCustomPos((prev) => {
         if (!prev) return null;
         const mapW = isMobile ? 190 : 248;
-        const mapH = 220;
+        const mapH = mapHeightRef.current;
         const maxX = Math.max(12, window.innerWidth - mapW - 12);
         const maxY = Math.max(56, window.innerHeight - mapH - 12);
         return {
@@ -543,7 +572,7 @@ export function RepositionableMap({
 
     const container = mapContainerRef.current;
     const width = container ? container.offsetWidth : isMobile ? 190 : 248;
-    const height = container ? container.offsetHeight : 220;
+    const height = container ? container.offsetHeight : mapHeightRef.current;
 
     const minX = 12;
     const maxX = Math.max(minX, window.innerWidth - width - 12);
@@ -565,7 +594,7 @@ export function RepositionableMap({
 
     const container = mapContainerRef.current;
     const width = container ? container.offsetWidth : isMobile ? 190 : 248;
-    const height = container ? container.offsetHeight : 220;
+    const height = container ? container.offsetHeight : mapHeightRef.current;
 
     const snapMargin = 90;
     const isLeft = customPos.x <= snapMargin;
@@ -587,19 +616,36 @@ export function RepositionableMap({
   };
 
   const getCornerClasses = (corner: MapDockCorner) => {
+    const currentHeight = mapHeightRef.current;
+    const isShortMobile =
+      isMobile &&
+      typeof window !== "undefined" &&
+      window.innerHeight - currentHeight < 176 + 12;
+
+    const mobileBottomClass = isShortMobile
+      ? typeof window !== "undefined" &&
+        window.innerHeight - currentHeight >= 128 + 8
+        ? "bottom-32"
+        : "top-16"
+      : "bottom-44";
+
     switch (corner) {
       case "bottom-left":
         return cn(
           "left-3 sm:left-5",
-          isMobile ? "bottom-44" : "bottom-3 sm:bottom-5"
+          isMobile ? mobileBottomClass : "bottom-3 sm:bottom-5"
         );
       case "bottom-right":
         return cn(
           "right-3 sm:right-5",
-          isMobile ? "bottom-44" : "bottom-20 sm:bottom-24"
+          isMobile
+            ? isShortMobile && mobileBottomClass === "top-16"
+              ? "top-28 lg:top-20"
+              : mobileBottomClass
+            : "bottom-32 sm:bottom-[7.75rem]"
         );
       case "top-right":
-        return "right-3 sm:right-5 top-16 sm:top-20";
+        return "right-3 sm:right-5 top-28 lg:top-20";
       case "top-left":
         return "left-3 sm:left-5 top-16 sm:top-20";
     }

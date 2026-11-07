@@ -119,12 +119,13 @@ test("Issue #124 - Repositionable and draggable building map", async (t) => {
   await t.test("Hud avoids UI collision in corner dock presets", () => {
     // bottom-right must clear bottom chat/wrench controls
     assert.ok(
-      hudCode.includes("bottom-20 sm:bottom-24"),
+      hudCode.includes("bottom-32 sm:bottom-[7.75rem]"),
       "Bottom-right corner dock should sit above chat and furnish controls"
     );
     // top corners must clear top header controls
     assert.ok(
-      hudCode.includes("top-16 sm:top-20"),
+      hudCode.includes("top-28 lg:top-20") &&
+        hudCode.includes("top-16 sm:top-20"),
       "Top corner docks should sit below header badges and buttons"
     );
   });
