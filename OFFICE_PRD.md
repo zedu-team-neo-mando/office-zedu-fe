@@ -541,19 +541,19 @@ Register `Office(r, ApiVersion, validator, db, logger)` in `pkg/router/router.go
 
 ### 5.7 Zoe spatial assistant
 
-| Item        | Spec                                                                                                                                                     |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Placement   | Reception desk, fixed system furniture, interaction radius 2m.                                                                                           |
-| Prompt      | Billboard above desk when in range: “Press E to talk to Zoe”.                                                                                            |
-| Dialog      | shadcn `Dialog`; header “Zoe — Zedu Contributor Assistant”; close returns to canvas.                                                                     |
-| Streaming   | SSE from `/api/office/zoe`; typewriter reveal; stop button aborts the request.                                                                           |
-| Inputs      | Text only in v1; quick chips: “My tasks”, “Team status”, “Deadlines”, “How do I…?”                                                                       |
-| Context     | Room kind/name, nearby users (max 10), user role/timezone, user tasks if available. No private room content.                                             |
-| Knowledge   | Existing Zoe system prompt + `knowledge.ts` summaries and transcript matching.                                                                           |
-| Answers     | Grounded in Zedu docs + cohort call knowledge; say “I couldn't find that” rather than invent.                                                            |
-| Proactive   | Stretch only: one greeting on first entry and one tip per session. No unsolicited spam.                                                                  |
-| Persistence | Stateless: office chats are not persisted by contributor-helper; the client sends the 30-message window each request. No rate limiting in v1 (accepted). |
-| Port later  | Same shared schema; move prompt/knowledge into zedu-fe and persistence to zedu-be.                                                                       |
+| Item        | Spec                                                                                                                                                            |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Placement   | Reception desk, fixed system furniture, interaction radius 2m.                                                                                                  |
+| Prompt      | Billboard above desk when in range: “Press E to talk to Zoe”.                                                                                                   |
+| Dialog      | shadcn `Dialog`; header “Zoe — Zedu Contributor Assistant”; close returns to canvas.                                                                            |
+| Streaming   | SSE from `/api/office/zoe`; typewriter reveal; stop button aborts the request.                                                                                  |
+| Inputs      | Text only in v1; quick chips: “My tasks”, “Team status”, “Deadlines”, “How do I…?”                                                                              |
+| Context     | Room kind/name, nearby users (max 10), user role/timezone, user tasks if available. No private room content.                                                    |
+| Knowledge   | Existing Zoe system prompt + `knowledge.ts` summaries and transcript matching.                                                                                  |
+| Answers     | Grounded in Zedu docs + cohort call knowledge; say “I couldn't find that” rather than invent.                                                                   |
+| Proactive   | Stretch only: one greeting on first entry and one tip per session. No unsolicited spam.                                                                         |
+| Persistence | Stateless: office chats are not persisted by contributor-helper; the client sends the 8 newest completed turns each request. No rate limiting in v1 (accepted). |
+| Port later  | Same shared schema; move prompt/knowledge into zedu-fe and persistence to zedu-be.                                                                              |
 
 **Zoe context shape**
 

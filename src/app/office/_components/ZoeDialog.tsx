@@ -9,13 +9,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import type { OfficeZoeHistoryMessage } from "~/types/office";
 import { ZOE_GREETING, ZOE_QUICK_CHIPS } from "./office-data";
+
+/** The newest completed turns sent with each question, matching the route cap. */
+const HISTORY_LIMIT = 8;
 
 interface ZoeMessage {
   id: string;
   role: "assistant" | "user";
   content: string;
   streaming?: boolean;
+  /** Set when a reply was stopped mid-stream or failed, so Zoe never sees it. */
+  excludeFromHistory?: boolean;
 }
 
 export default function ZoeDialog({
@@ -28,7 +34,10 @@ export default function ZoeDialog({
   open: boolean;
   roomName: string;
   nearby: string[];
-  ask: (question: string) => Promise<string>;
+  ask: (
+    question: string,
+    history: OfficeZoeHistoryMessage[]
+  ) => Promise<string>;
   onClose: () => void;
 }) {
   const [messages, setMessages] = useState<ZoeMessage[]>([]);
@@ -37,6 +46,7 @@ export default function ZoeDialog({
   const [streaming, setStreaming] = useState(false);
   const timerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
+  const pendingUserIdRef = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -45,11 +55,20 @@ export default function ZoeDialog({
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     timerRef.current = null;
     timeoutRef.current = null;
+    const pendingUserId = pendingUserIdRef.current;
+    pendingUserIdRef.current = null;
     setThinking(false);
     setStreaming(false);
-    setMessages((prev) =>
-      prev.map((message) => ({ ...message, streaming: false }))
-    );
+    setMessages((prev) => {
+      const messagesWithoutPending = pendingUserId
+        ? prev.filter((message) => message.id !== pendingUserId)
+        : prev;
+      return messagesWithoutPending.map((message) =>
+        message.streaming
+          ? { ...message, streaming: false, excludeFromHistory: true }
+          : { ...message, streaming: false }
+      );
+    });
   };
 
   useEffect(() => {
@@ -87,12 +106,27 @@ export default function ZoeDialog({
       content: text,
     };
     const answerId = `z-${Date.now()}`;
+    // The dialog already holds the thread, so send the newest completed turns
+    // with the question instead of letting Zoe forget the conversation. The
+    // greeting is scene copy, not something the assistant said.
+    const history: OfficeZoeHistoryMessage[] = messages
+      .filter(
+        (message) =>
+          message.id !== "zoe-greeting" &&
+          !message.streaming &&
+          !message.excludeFromHistory &&
+          message.content.trim().length > 0
+      )
+      .slice(-HISTORY_LIMIT)
+      .map(({ role, content }) => ({ role, content }));
     setMessages((prev) => [...prev, userMessage]);
     setDraft("");
     setThinking(true);
+    pendingUserIdRef.current = userMessage.id;
 
     timeoutRef.current = window.setTimeout(() => {
-      ask(text)
+      pendingUserIdRef.current = null;
+      ask(text, history)
         .then((answer) => {
           setThinking(false);
           setMessages((prev) => [
@@ -133,7 +167,12 @@ export default function ZoeDialog({
               : "Zoe could not answer that right now.";
           setMessages((prev) => [
             ...prev,
-            { id: answerId, role: "assistant", content: message },
+            {
+              id: answerId,
+              role: "assistant",
+              content: message,
+              excludeFromHistory: true,
+            },
           ]);
         });
     }, 700);
