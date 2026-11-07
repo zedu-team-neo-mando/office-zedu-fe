@@ -90,6 +90,12 @@ const STATUS_DOT: Record<PresenceStatus, string> = {
   dnd: "#f43f5e",
 };
 
+/**
+ * Main HUD overlay for the Virtual Office, displaying room details, top bar navigation,
+ * action buttons (chat, furnish, map, directory), and mobile touch controls.
+ *
+ * @param props - Office state, rooms, presence, player position, and user action callbacks.
+ */
 export default function Hud({
   room,
   rooms,
@@ -401,6 +407,12 @@ export default function Hud({
   );
 }
 
+/**
+ * RepositionableMap wraps the building Minimap, supporting 4-corner docking presets,
+ * pointer-based drag-and-drop repositioning with viewport clamping, and localStorage persistence.
+ *
+ * @param props - Map open state, rooms list, player position, presence points, and navigation callback.
+ */
 export function RepositionableMap({
   mapOpen,
   onToggleMap,
@@ -519,6 +531,12 @@ export function RepositionableMap({
     return () => window.removeEventListener("resize", handleResize);
   }, [isMobile]);
 
+  /**
+   * Persists the selected corner preset or custom drag coordinates to local state and localStorage.
+   *
+   * @param corner - The active dock corner preset.
+   * @param custom - Custom x/y coordinates when manually positioned, or null when docked.
+   */
   const savePosition = (
     corner: MapDockCorner,
     custom: { x: number; y: number } | null
@@ -535,6 +553,9 @@ export function RepositionableMap({
     }
   };
 
+  /**
+   * Cycles the minimap dock location clockwise through all 4 viewport corners.
+   */
   const cycleCorner = () => {
     const corners: MapDockCorner[] = [
       "bottom-left",
@@ -547,6 +568,11 @@ export function RepositionableMap({
     savePosition(nextCorner, null);
   };
 
+  /**
+   * Initiates pointer drag on the minimap header handle and captures pointer events.
+   *
+   * @param e - Pointer down event on the drag handle.
+   */
   const handleDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest("button, a, input")) return;
@@ -564,6 +590,11 @@ export function RepositionableMap({
     setIsDragging(true);
   };
 
+  /**
+   * Updates custom position while dragging, clamping coordinates within visible viewport bounds.
+   *
+   * @param e - Pointer move event during an active drag.
+   */
   const handleDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDragging || !dragStartRef.current) return;
     const { startX, startY, startLeft, startTop } = dragStartRef.current;
@@ -585,6 +616,12 @@ export function RepositionableMap({
     setCustomPos({ x: newX, y: newY });
   };
 
+  /**
+   * Ends dragging, automatically snapping to the nearest corner if released within margin,
+   * or saving the custom clamped position.
+   *
+   * @param e - Pointer up event concluding the drag.
+   */
   const handleDragEnd = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDragging) return;
     setIsDragging(false);
@@ -615,6 +652,13 @@ export function RepositionableMap({
     }
   };
 
+  /**
+   * Computes viewport-aware Tailwind positioning classes for each corner dock preset,
+   * ensuring that neither bottom corner overlaps HUD controls or slides off-screen.
+   *
+   * @param corner - The target dock corner preset.
+   * @returns Tailwind class string for positioning the map container.
+   */
   const getCornerClasses = (corner: MapDockCorner) => {
     const currentHeight = mapHeightRef.current;
     const isShortMobile =
@@ -629,6 +673,14 @@ export function RepositionableMap({
         : "top-16"
       : "bottom-44";
 
+    const canFitAboveChatOnMobile =
+      typeof window !== "undefined" &&
+      window.innerHeight - currentHeight >= 280 + 56;
+
+    const mobileBottomRightClass = canFitAboveChatOnMobile
+      ? "bottom-72"
+      : "top-28 lg:top-20";
+
     switch (corner) {
       case "bottom-left":
         return cn(
@@ -638,11 +690,7 @@ export function RepositionableMap({
       case "bottom-right":
         return cn(
           "right-3 sm:right-5",
-          isMobile
-            ? isShortMobile && mobileBottomClass === "top-16"
-              ? "top-28 lg:top-20"
-              : mobileBottomClass
-            : "bottom-32 sm:bottom-[7.75rem]"
+          isMobile ? mobileBottomRightClass : "bottom-32 sm:bottom-[7.75rem]"
         );
       case "top-right":
         return "right-3 sm:right-5 top-28 lg:top-20";
@@ -702,6 +750,12 @@ export function RepositionableMap({
   );
 }
 
+/**
+ * Renders the 2D SVG floor plan of the current office floor, showing room boundaries,
+ * names, capacity statuses, player coordinates, and colleague presence dots.
+ *
+ * @param props - Room list, current room, player location, presence list, and drag handlers.
+ */
 export function Minimap({
   rooms,
   currentRoomId,
@@ -972,6 +1026,12 @@ export function Minimap({
   );
 }
 
+/**
+ * Mobile on-screen touch controls, including a virtual analog joystick for movement
+ * and quick-action buttons for interacting with Zoe and furnishing.
+ *
+ * @param props - Interaction state flags and trigger callbacks.
+ */
 function MobileControls({
   nearZoe,
   editorOpen,
@@ -986,6 +1046,12 @@ function MobileControls({
   const padRef = useRef<HTMLDivElement>(null);
   const [knob, setKnob] = useState({ x: 0, y: 0, active: false });
 
+  /**
+   * Translates touch/pointer coordinates to a normalised directional vector for the joystick.
+   *
+   * @param clientX - Pointer X client coordinate.
+   * @param clientY - Pointer Y client coordinate.
+   */
   const update = (clientX: number, clientY: number) => {
     const pad = padRef.current;
     if (!pad) return;
@@ -1005,6 +1071,9 @@ function MobileControls({
     );
   };
 
+  /**
+   * Resets the joystick knob position and dispatches a zeroed joystick event.
+   */
   const end = () => {
     setKnob({ x: 0, y: 0, active: false });
     window.dispatchEvent(
@@ -1064,6 +1133,11 @@ function MobileControls({
   );
 }
 
+/**
+ * Pill badge displaying the current room name and icon, triggering the directory modal when clicked.
+ *
+ * @param props - Current room reference and modal opener callback.
+ */
 export function RoomPill({
   room,
   onOpen,
@@ -1084,6 +1158,9 @@ export function RoomPill({
   );
 }
 
+/**
+ * Small keyboard/touch shortcut hint label indicating how to toggle the minimap.
+ */
 export function MapHint() {
   return (
     <span className="flex items-center gap-1 text-[0.6rem] text-[#7f89a4]">
