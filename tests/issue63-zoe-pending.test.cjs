@@ -10,6 +10,9 @@ const source = fs.readFileSync(
   path.join(__dirname, "../src/app/office/_components/ZoeDialog.tsx"),
   "utf8"
 );
+const historyLimit = Number(
+  source.match(/const HISTORY_LIMIT = (\d+);/)?.[1] ?? 8
+);
 const ast = ts.createSourceFile(
   "ZoeDialog.tsx",
   source,
@@ -20,19 +23,25 @@ const ast = ts.createSourceFile(
 const component = ast.statements.find(
   (node) => ts.isFunctionDeclaration(node) && node.name?.text === "ZoeDialog"
 );
-const declaration = component.body.statements.find(
+const declaration = component.body.statements.filter(
   (node) =>
     ts.isVariableStatement(node) &&
-    node.declarationList.declarations.some(
-      (item) => item.name.getText(ast) === "send"
+    node.declarationList.declarations.some((item) =>
+      ["stop", "send"].includes(item.name.getText(ast))
     )
 );
-const code = ts.transpileModule(declaration.getText(ast), {
-  compilerOptions: { target: ts.ScriptTarget.ES2020 },
-}).outputText;
+const code = ts.transpileModule(
+  declaration.map((item) => item.getText(ast)).join("\n"),
+  {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }
+).outputText;
 
 function harness() {
   const state = { thinking: false, streaming: false, messages: [], calls: 0 };
+  const timeoutRef = { current: null };
+  const timerRef = { current: null };
+  const pendingUserIdRef = { current: null };
   let timeout;
   let interval;
   let resolve;
@@ -45,14 +54,17 @@ function harness() {
     "window",
     "thinking",
     "streaming",
+    "messages",
     "setThinking",
     "setStreaming",
     "setMessages",
     "setDraft",
     "timeoutRef",
     "timerRef",
+    "pendingUserIdRef",
+    "HISTORY_LIMIT",
     "ask",
-    code + ";return send;"
+    code + ";return { stop, send };"
   );
   const window = {
     setTimeout(callback) {
@@ -63,19 +75,23 @@ function harness() {
       interval = callback;
       return 2;
     },
+    clearTimeout() {},
     clearInterval() {},
   };
-  const renderSend = () =>
+  const render = () =>
     build(
       window,
       state.thinking,
       state.streaming,
+      state.messages,
       (value) => (state.thinking = value),
       (value) => (state.streaming = value),
       (update) => (state.messages = update(state.messages)),
       () => {},
-      { current: null },
-      { current: null },
+      timeoutRef,
+      timerRef,
+      pendingUserIdRef,
+      historyLimit,
       () => {
         state.calls++;
         return answer;
@@ -83,7 +99,8 @@ function harness() {
     );
   return {
     state,
-    send: (text) => renderSend()(text),
+    send: (text) => render().send(text),
+    stop: () => render().stop(),
     startRequest: () => timeout(),
     stream: () => interval(),
     resolve,
@@ -91,6 +108,26 @@ function harness() {
     settle: () => new Promise((done) => setImmediate(done)),
   };
 }
+
+test("closing before dispatch removes the unsent question", () => {
+  const h = harness();
+  h.send("Canceled question");
+  assert.equal(h.state.messages.length, 1);
+  h.stop();
+  assert.equal(h.state.messages.length, 0);
+  assert.equal(h.state.thinking, false);
+  assert.equal(h.state.calls, 0);
+});
+
+test("closing after dispatch keeps the user question", () => {
+  const h = harness();
+  h.send("Sent question");
+  h.startRequest();
+  h.stop();
+  assert.equal(h.state.messages.length, 1);
+  assert.equal(h.state.messages[0].content, "Sent question");
+  assert.equal(h.state.calls, 1);
+});
 
 test("pending backend request keeps thinking active and blocks another send", () => {
   const h = harness();

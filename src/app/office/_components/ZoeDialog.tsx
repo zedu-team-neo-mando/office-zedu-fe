@@ -46,6 +46,7 @@ export default function ZoeDialog({
   const [streaming, setStreaming] = useState(false);
   const timerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
+  const pendingUserIdRef = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -54,15 +55,20 @@ export default function ZoeDialog({
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     timerRef.current = null;
     timeoutRef.current = null;
+    const pendingUserId = pendingUserIdRef.current;
+    pendingUserIdRef.current = null;
     setThinking(false);
     setStreaming(false);
-    setMessages((prev) =>
-      prev.map((message) =>
+    setMessages((prev) => {
+      const messagesWithoutPending = pendingUserId
+        ? prev.filter((message) => message.id !== pendingUserId)
+        : prev;
+      return messagesWithoutPending.map((message) =>
         message.streaming
           ? { ...message, streaming: false, excludeFromHistory: true }
           : { ...message, streaming: false }
-      )
-    );
+      );
+    });
   };
 
   useEffect(() => {
@@ -116,9 +122,10 @@ export default function ZoeDialog({
     setMessages((prev) => [...prev, userMessage]);
     setDraft("");
     setThinking(true);
+    pendingUserIdRef.current = userMessage.id;
 
     timeoutRef.current = window.setTimeout(() => {
-
+      pendingUserIdRef.current = null;
       ask(text, history)
         .then((answer) => {
           setThinking(false);
