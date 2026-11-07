@@ -1331,7 +1331,10 @@ export class LiveOfficeSource implements OfficeSource {
       const seen = new Set<string>();
       let primed = false;
       const read = async () => {
-        if (stopped || document.hidden) return;
+        // The first read only marks what is already shown, so it runs even in
+        // a hidden window; otherwise a message sent before the window is shown
+        // again would be marked as seen and never delivered.
+        if (stopped || (primed && document.hidden)) return;
         try {
           const messages = await this.readZeduMessages(roomId, conversation);
           for (const message of messages) {
