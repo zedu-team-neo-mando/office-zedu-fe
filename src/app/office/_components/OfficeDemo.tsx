@@ -361,8 +361,17 @@ export default function OfficeDemo({
   }>({ token: 0, roomId: null, enter: false });
   const [activeFloor, setActiveFloor] = useState(0);
   const floorRooms = useMemo(
-    () => rooms.filter((room) => (room.floorIndex ?? 0) === activeFloor),
-    [rooms, activeFloor]
+    () =>
+      source.mode === "demo" && activeFloor === 0
+        ? rooms.filter(
+            (room) =>
+              (room.floorIndex ?? 0) === 0 ||
+              room.id === "personal:ada" ||
+              room.id === "personal:tunde" ||
+              room.id === "personal:you"
+          )
+        : rooms.filter((room) => (room.floorIndex ?? 0) === activeFloor),
+    [rooms, activeFloor, source.mode]
   );
   // A portal on the channels floor returns to the private floor the visitor
   // came from. The client owns that target because the server cannot know it;
