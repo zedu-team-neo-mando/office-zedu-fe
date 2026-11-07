@@ -69,7 +69,14 @@ export default function DesktopSignIn() {
       const data = body?.data;
       const user = data?.user;
       const orgSlug = user?.current_organisation_slug;
-      if (!data?.access_token || !orgSlug) {
+      // Everything stored below is checked first, so a short answer never
+      // leaves a half-written session or an "undefined" organisation.
+      if (
+        !data?.access_token ||
+        !orgSlug ||
+        !user?.email ||
+        !user?.current_org
+      ) {
         setFailure("The office could not sign you in.");
         return;
       }
