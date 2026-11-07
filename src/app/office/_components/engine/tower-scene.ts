@@ -16,6 +16,15 @@ import { PALETTE } from "./palette";
  * the camera and the interaction live in the engine.
  */
 
+/** One person standing in a room, as the tower draws and lists them. */
+export interface TowerOccupant {
+  userId: string;
+  name: string;
+  avatarUrl?: string;
+  tint?: string;
+  status?: "online" | "idle" | "away" | "call" | "dnd";
+}
+
 export interface TowerOffice {
   roomId: string;
   floorIndex: number;
@@ -29,6 +38,12 @@ export interface TowerOffice {
   tint?: string;
   /** Portrait of the person who owns the office, when the source has one. */
   avatarUrl?: string;
+  /**
+   * Everybody standing in the room. A shared room draws up to three faces from
+   * this list; a private office keeps its owner's portrait and lists the rest
+   * in the hover card instead.
+   */
+  occupants?: TowerOccupant[];
   /** False for decorative offices the demo fills a storey with. */
   interactive?: boolean;
   /** The signed-in person's own office, marked so the tower can label it. */
@@ -208,6 +223,53 @@ function avatarTexture(
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 4;
   return texture;
+}
+
+/**
+ * The `+N` disc that closes an avatar row: how many more people are in the room
+ * than the cell has space to draw.
+ */
+function countTexture(count: number): THREE.Texture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.beginPath();
+    ctx.arc(64, 64, 56, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(18, 30, 26, 0.92)";
+    ctx.fill();
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+    ctx.stroke();
+
+    ctx.fillStyle = "#fffdf8";
+    ctx.font = "700 44px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`+${count}`, 64, 66);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+/**
+ * The occupant list as one comparable string. Presence republishes several
+ * times a second, so the tower rebuilds a cell only when the people in it, or
+ * how they are drawn, actually change.
+ */
+function occupantKey(office: TowerOffice): string {
+  return (office.occupants ?? [])
+    .map(
+      (occupant) =>
+        `${occupant.userId}:${occupant.name}:${occupant.status ?? ""}:${
+          occupant.avatarUrl ?? ""
+        }:${occupant.tint ?? ""}`
+    )
+    .join(",");
 }
 
 /**
@@ -474,7 +536,8 @@ export class TowerScene {
         next.occupantName !== cell.office.occupantName ||
         next.avatarUrl !== cell.office.avatarUrl ||
         next.isSelf !== cell.office.isSelf ||
-        Boolean(next.interactive) !== Boolean(cell.office.interactive)
+        Boolean(next.interactive) !== Boolean(cell.office.interactive) ||
+        occupantKey(next) !== occupantKey(cell.office)
       ) {
         needsRebuild = true;
         break;
@@ -1051,6 +1114,14 @@ export class TowerScene {
       cell.plate = plate;
     }
 
+    // Who is in the room. A shared room has no owner to draw, so the people
+    // standing in it are the only sign that it is busy. A private office keeps
+    // the owner's portrait and lists everyone else in the hover card, so the
+    // row stays out of the way of that portrait.
+    if (shared) {
+      this.buildOccupantRow(office, rect, w, h, zBack + 0.12);
+    }
+
     // The invisible pick plane sits in front of everything. It makes the whole
     // window clickable without changing how the room looks.
     const pick = new THREE.Mesh(
@@ -1069,6 +1140,62 @@ export class TowerScene {
     this.cellMeshes.push(pick);
 
     this.cells.set(office.roomId, cell);
+  }
+
+  /**
+   * Draws the faces of the people standing in a shared room: up to three of
+   * them, then a `+N` disc for the rest. The row shrinks with the cell, so a
+   * narrow channel slot still reads as occupied instead of overflowing.
+   */
+  private buildOccupantRow(
+    office: TowerOffice,
+    rect: CellRect,
+    w: number,
+    h: number,
+    z: number
+  ) {
+    const occupants = office.occupants ?? [];
+    if (!occupants.length) return;
+
+    const maxFaces = w >= 1 ? 3 : w >= 0.7 ? 2 : 1;
+    const faces = occupants.slice(0, maxFaces);
+    const overflow = occupants.length - faces.length;
+    const slots = faces.length + (overflow > 0 ? 1 : 0);
+    const size = clamp(Math.min(w / (slots + 1.2), h * 0.26), 0.12, 0.34);
+    const gap = size * 0.82;
+    const rowW = size + gap * (slots - 1);
+    const startX = rect.x - rowW / 2 + size / 2;
+    const rowY = rect.y + h * 0.2;
+
+    const addDisc = (texture: THREE.Texture, slot: number) => {
+      const disc = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: texture,
+          transparent: true,
+          depthWrite: false,
+        })
+      );
+      disc.scale.set(size, size, 1);
+      disc.position.set(startX + slot * gap, rowY, z);
+      this.shell.add(disc);
+    };
+
+    faces.forEach((occupant, slot) => {
+      const tint = occupant.tint ?? "#8aa99a";
+      addDisc(
+        occupant.avatarUrl
+          ? portraitTexture(occupant.avatarUrl, occupant.name, tint, false)
+          : avatarTexture(
+              occupant.name,
+              tint,
+              occupant.status !== "away",
+              false
+            ),
+        slot
+      );
+    });
+
+    if (overflow > 0) addDisc(countTexture(overflow), faces.length);
   }
 
   // ------------------------------------------------------------------ state

@@ -148,6 +148,8 @@ test("Back to tower switches the existing office view without leaving it", () =>
   const createOpenTower = compileFunction(
     functionSource(sourceAst("OfficeDemo.tsx"), "openTower"),
     [
+      "cancelTowerPick",
+      "setChatTargetId",
       "engineRef",
       "setActiveFloor",
       "setTowerFocus",
@@ -156,6 +158,7 @@ test("Back to tower switches the existing office view without leaving it", () =>
       "setMapOpen",
       "setDirectoryOpen",
       "setChatOpen",
+      "telemetry",
     ]
   );
   const calls = [];
@@ -165,6 +168,8 @@ test("Back to tower switches the existing office view without leaving it", () =>
     focusTowerFloor: (floor) => calls.push(["focusTowerFloor", floor]),
   };
   const openTower = createOpenTower(
+    () => calls.push(["cancelTowerPick"]),
+    (target) => calls.push(["chatTarget", target]),
     { current: engine },
     (floor) => calls.push(["activeFloor", floor]),
     (floor) => calls.push(["towerFocus", floor]),
@@ -172,11 +177,14 @@ test("Back to tower switches the existing office view without leaving it", () =>
     (open) => calls.push(["towerOpen", open]),
     (open) => calls.push(["mapOpen", open]),
     (open) => calls.push(["directoryOpen", open]),
-    (open) => calls.push(["chatOpen", open])
+    (open) => calls.push(["chatOpen", open]),
+    { towerOpened: () => calls.push(["telemetry", "towerOpened"]) }
   );
   openTower();
 
   assert.deepEqual(calls, [
+    ["cancelTowerPick"],
+    ["chatTarget", null],
     ["activeFloor", 3],
     ["view", "tower"],
     ["focusTowerFloor", null],
@@ -186,6 +194,7 @@ test("Back to tower switches the existing office view without leaving it", () =>
     ["mapOpen", false],
     ["directoryOpen", false],
     ["chatOpen", false],
+    ["telemetry", "towerOpened"],
   ]);
 });
 

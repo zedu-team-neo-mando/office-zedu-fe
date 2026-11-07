@@ -230,6 +230,14 @@ export interface OfficeSource {
    */
   fetchMessages(roomId: string): Promise<OfficeChatMessage[]>;
   /**
+   * Opens the conversation with one person, creating the DM if there is not one
+   * yet, and returns the private office that conversation belongs to. Zedu chat
+   * treats a click on a name as starting the conversation, and an office is
+   * visitable because its DM exists, so the click has to be what creates it.
+   * Optional: the demo has no real conversations and leaves its offices alone.
+   */
+  openConversation?(memberUserId: string): Promise<OfficeRoom | null>;
+  /**
    * The doors of the personal offices on a storey, as their owners set them.
    * `onDoor` is called with each state that becomes known, including this
    * user's own. Optional: a source without it shows every door open.
@@ -256,4 +264,5 @@ export interface OfficeChatMessage {
   text: string;
   at: number;
   self?: boolean;
+  system?: boolean;
 }
