@@ -23,7 +23,7 @@ export function TowerView({
   onShowTower,
   onClose,
   onLeave,
-  onPickPerson,
+  onPickRoom,
 }: {
   floors: OfficeFloor[];
   offices: TowerOffice[];
@@ -35,7 +35,7 @@ export function TowerView({
   onShowTower: () => void;
   onClose: () => void;
   onLeave: () => void;
-  onPickPerson: (office: TowerOffice) => void;
+  onPickRoom: (office: { roomId: string; floorIndex: number }) => void;
 }) {
   const [query, setQuery] = useState("");
 
@@ -114,7 +114,7 @@ export function TowerView({
                 <li key={office.roomId}>
                   <button
                     type="button"
-                    onClick={() => onPickPerson(office)}
+                    onClick={() => onPickRoom(office)}
                     className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm text-white/85 transition hover:bg-white/10"
                   >
                     <span className="truncate">
@@ -136,7 +136,7 @@ export function TowerView({
           )}
 
           <p className="mt-2 px-1 text-[0.65rem] leading-relaxed text-white/35">
-            Click an office to read its chat, click it again to step inside.
+            Click a room to read its chat, click it again to step inside.
           </p>
         </div>
 
@@ -158,10 +158,10 @@ export function TowerView({
       </div>
 
       {hovered && (
-        <div className="pointer-events-none mx-auto rounded-xl border border-white/10 bg-[#0b0f1c]/90 px-3 py-2 text-center text-xs text-white/80 backdrop-blur">
-          <span className="font-medium text-white">{hovered.name}</span>
-          <span className="text-white/50"> · Floor {hovered.floorIndex}</span>
-          {hovered.present && (
+        <>
+          <div className="pointer-events-none mx-auto rounded-xl border border-white/10 bg-[#0b0f1c]/90 px-3 py-2 text-center text-xs text-white/80 backdrop-blur">
+            <span className="font-medium text-white">{hovered.name}</span>
+            <span className="text-white/50"> · Floor {hovered.floorIndex}</span>
             <span className="ml-2 inline-flex items-center gap-1">
               <span
                 className={cn(
@@ -177,10 +177,32 @@ export function TowerView({
                           : "bg-emerald-400"
                 )}
               />
-              in their office
+              {hovered.present ? "in their office" : "in the building"}
             </span>
+          </div>
+          {hovered.occupants && hovered.occupants.length > 0 && (
+            <div className="pointer-events-none mt-2 flex flex-wrap gap-1 justify-center max-w-[260px]">
+              {hovered.occupants.slice(0, 6).map((occupant) => (
+                <div
+                  key={occupant.userId}
+                  className="flex items-center gap-1 rounded-full border border-white/10 bg-[#0b0f1c]/80 px-2 py-1 text-[0.58rem] text-white/85 backdrop-blur"
+                  title={occupant.name}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full" />
+                  <span>{occupant.name}</span>
+                  {occupant.status !== "online" && (
+                    <span className="text-white/50">{occupant.status}</span>
+                  )}
+                </div>
+              ))}
+              {hovered.occupants.length > 6 && (
+                <span className="rounded-full border border-white/10 bg-[#0b0f1c]/80 px-2 py-1 text-[0.58rem] text-white/70 backdrop-blur">
+                  +{hovered.occupants.length - 6} more
+                </span>
+              )}
+            </div>
           )}
-        </div>
+        </>
       )}
 
       <div className="pointer-events-auto mx-auto flex max-w-full items-center gap-3 rounded-2xl border border-white/10 bg-[#0b0f1c]/90 px-3 py-2 backdrop-blur">

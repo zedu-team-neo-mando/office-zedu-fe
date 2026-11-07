@@ -118,10 +118,10 @@ export default function ZoeDialog({
     setThinking(true);
 
     timeoutRef.current = window.setTimeout(() => {
-      setThinking(false);
 
       ask(text, history)
         .then((answer) => {
+          setThinking(false);
           setMessages((prev) => [
             ...prev,
             { id: answerId, role: "assistant", content: "", streaming: true },
@@ -153,6 +153,7 @@ export default function ZoeDialog({
           }, 16);
         })
         .catch((error: unknown) => {
+          setThinking(false);
           const message =
             error instanceof Error
               ? error.message
