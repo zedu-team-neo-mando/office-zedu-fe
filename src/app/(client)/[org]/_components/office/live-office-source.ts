@@ -27,7 +27,6 @@ import type {
   OfficeRoom,
   OfficeSource,
   OfficeZoeContext,
-  OfficeZoeHistoryMessage,
 } from "~/types/office";
 import { ROOMS } from "~/app/office/_components/office-data";
 import { entryErrorFromResponse } from "~/app/office/_components/office-entry";
@@ -36,6 +35,21 @@ import {
   personalOfficeTemplate,
   withPersonalOfficeDefaults,
 } from "~/app/office/_components/office-layout";
+import { storedZeduSession } from "./desktop-bridge";
+import {
+  fetchZeduThreads,
+  postZeduThread,
+  resolveZeduDm,
+  subscribeZeduChannel,
+  zeduSelfId,
+  type ZeduConversation,
+} from "./zedu-chat";
+
+/** How often an open room re-reads zedu inside Zedu Desktop. */
+const ZEDU_CHAT_POLL_MS = 4000;
+/** First and longest wait before retrying a room's zedu setup that failed. */
+const ZEDU_SETUP_RETRY_MS = 2_000;
+const ZEDU_SETUP_RETRY_MAX_MS = 30_000;
 
 /** The API speaks two dimensions, the scene works in three. */
 function toSceneItem(item: OfficeApiItem): OfficeFurnitureItem {
@@ -436,6 +450,8 @@ export class LiveOfficeSource implements OfficeSource {
   private channelRoomMap: Record<string, string> = {};
   private dmOfficeMap: Record<string, string> = {};
   private dmRoomMap: Record<string, string> = {};
+  /** Inside Zedu Desktop, each private office's zedu DM once it is found. */
+  private zeduDms = new Map<string, Promise<ZeduConversation | null>>();
   /** Conversations being started right now, so a double click makes one DM. */
   private openingConversations = new Map<string, Promise<OfficeRoom | null>>();
   private floorByRoom: Record<string, number> = {};
@@ -629,7 +645,14 @@ export class LiveOfficeSource implements OfficeSource {
       media: [],
     };
 
-    if (roomId.startsWith("channel:")) {
+    const zeduSession = storedZeduSession();
+    if (zeduSession) {
+      const conversation = await this.zeduConversationFor(roomId);
+      if (!conversation) {
+        throw new Error("This conversation could not be found in Zedu.");
+      }
+      await postZeduThread(zeduSession, conversation, payload);
+    } else if (roomId.startsWith("channel:")) {
       unwrap(
         await PostRequest(`/threads/${channelId}`, payload),
         "The message was not sent."
@@ -656,11 +679,7 @@ export class LiveOfficeSource implements OfficeSource {
     ];
   }
 
-  async askZoe(
-    question: string,
-    context: OfficeZoeContext,
-    history: OfficeZoeHistoryMessage[] = []
-  ) {
+  async askZoe(question: string, context: OfficeZoeContext) {
     // Zoe is answered by the Next proxy route, which keeps the service token
     // on the server. The Go API has no /office/zoe endpoint.
     const token = localStorage.getItem("token") ?? "";
@@ -670,9 +689,7 @@ export class LiveOfficeSource implements OfficeSource {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(
-        createZoeRequest(question, context, this.orgId, history)
-      ),
+      body: JSON.stringify(createZoeRequest(question, context, this.orgId)),
     });
 
     if (!response.ok) {
@@ -1155,6 +1172,14 @@ export class LiveOfficeSource implements OfficeSource {
     const channelId = this.channelIdForRoom(roomId);
     if (!channelId) return [];
 
+    // Inside Zedu Desktop a room's conversation is the zedu one itself.
+    const zeduSession = storedZeduSession();
+    if (zeduSession) {
+      const conversation = await this.zeduConversationFor(roomId);
+      if (!conversation) return [];
+      return this.readZeduMessages(roomId, conversation);
+    }
+
     // The office reads the conversation the 2D chat already draws: channel
     // threads for a channel room, DM threads for the office that mirrors a DM.
     const path = roomId.startsWith("channel:")
@@ -1181,6 +1206,11 @@ export class LiveOfficeSource implements OfficeSource {
     const channelId = this.channelIdForRoom(roomId);
     if (!channelId) return () => {};
 
+    const zeduSession = storedZeduSession();
+    if (zeduSession) {
+      return this.followZeduMessages(roomId, onMessage);
+    }
+
     // New messages land on the raw backend channel id, the same name the 2D
     // chat subscribes to — there is no office-scoped chat channel to join.
     const client = getSharedCentrifuge();
@@ -1202,6 +1232,151 @@ export class LiveOfficeSource implements OfficeSource {
     return () => {
       subscription.off("publication", onPublication);
       releaseChannelSubscription(client, channelId, subscription);
+    };
+  }
+
+  /**
+   * The zedu conversation behind a room, inside Zedu Desktop. A channel room
+   * is the zedu channel under the same ID. A private office's office DM stays
+   * its door key, but its messages live in the zedu DM with the same person,
+   * found through the colleague's email and remembered per room.
+   */
+  private zeduConversationFor(
+    roomId: string
+  ): Promise<ZeduConversation | null> {
+    if (roomId.startsWith("channel:")) {
+      return Promise.resolve({
+        kind: "channel",
+        id: roomId.slice("channel:".length),
+      });
+    }
+    const officeDmId = roomId.startsWith("personal:")
+      ? this.dmRoomMap[roomId]
+      : undefined;
+    const session = storedZeduSession();
+    if (!officeDmId || !session) return Promise.resolve(null);
+
+    const cached = this.zeduDms.get(roomId);
+    if (cached) return cached;
+
+    const lookup = this.officeDmEmail(officeDmId)
+      .then((email) =>
+        email ? resolveZeduDm(session, this.orgId, email) : null
+      )
+      .then((id): ZeduConversation | null => (id ? { kind: "dm", id } : null))
+      .catch((error) => {
+        this.zeduDms.delete(roomId);
+        throw error;
+      });
+    this.zeduDms.set(roomId, lookup);
+    return lookup;
+  }
+
+  /** The other person's email on an office DM, from the office's DM list. */
+  private async officeDmEmail(officeDmId: string): Promise<string | null> {
+    const dms =
+      unwrap<Array<{ channel_id?: string; participant_email?: string }>>(
+        await GetRequest(`/organisations/${this.orgId}/dms?page=1&limit=200`),
+        "The conversation could not be read."
+      ) ?? [];
+    return (
+      dms.find((dm) => dm.channel_id === officeDmId)?.participant_email ?? null
+    );
+  }
+
+  private async readZeduMessages(
+    roomId: string,
+    conversation: ZeduConversation
+  ): Promise<OfficeChatMessage[]> {
+    const session = storedZeduSession();
+    if (!session) return [];
+    const [rows, selfId] = await Promise.all([
+      fetchZeduThreads(session, conversation),
+      zeduSelfId(session),
+    ]);
+    return (rows as RawChatRow[])
+      .map((row) => toOfficeMessage(roomId, row, selfId))
+      .filter((message): message is OfficeChatMessage => Boolean(message))
+      .sort((a, b) => a.at - b.at);
+  }
+
+  /**
+   * New messages in a room's zedu conversation: live over zedu's Centrifugo,
+   * or, without its address (ZEDU_CONNECT_URL unset on the office backend),
+   * by re-reading every few seconds. A poll's first read only marks what is
+   * already shown.
+   */
+  private followZeduMessages(
+    roomId: string,
+    onMessage: (message: OfficeChatMessage) => void
+  ): () => void {
+    let stopped = false;
+    let stop: (() => void) | null = null;
+    // The confirmed send result draws our own message; skip its echo.
+    const deliver = (message: OfficeChatMessage | null) => {
+      if (!stopped && message && !message.self) onMessage(message);
+    };
+
+    const start = async () => {
+      const session = storedZeduSession();
+      const conversation = await this.zeduConversationFor(roomId);
+      if (stopped || !session || !conversation) return;
+      const selfId = await zeduSelfId(session).catch(() => "");
+      if (stopped) return;
+
+      stop = subscribeZeduChannel(session, conversation.id, (data) => {
+        if (data?.type === "message") {
+          deliver(toOfficeMessage(roomId, data, selfId));
+        }
+      });
+      if (stop) return;
+
+      const seen = new Set<string>();
+      let primed = false;
+      const read = async () => {
+        // The first read only marks what is already shown, so it runs even in
+        // a hidden window; otherwise a message sent before the window is shown
+        // again would be marked as seen and never delivered.
+        if (stopped || (primed && document.hidden)) return;
+        try {
+          const messages = await this.readZeduMessages(roomId, conversation);
+          for (const message of messages) {
+            if (seen.has(message.id)) continue;
+            seen.add(message.id);
+            if (primed) deliver(message);
+          }
+          primed = true;
+        } catch {
+          // A missed read is retried on the next tick.
+        }
+      };
+      read();
+      const timer = window.setInterval(read, ZEDU_CHAT_POLL_MS);
+      stop = () => window.clearInterval(timer);
+    };
+
+    // A setup that throws, such as a dropped request while finding the zedu
+    // DM, is retried with growing delays while the room stays open, so the
+    // room does not stay silent after a brief outage.
+    let attempt = 0;
+    let retryTimer: number | undefined;
+    const setUp = () => {
+      start().catch(() => {
+        if (stopped) return;
+        const delay = Math.min(
+          ZEDU_SETUP_RETRY_MAX_MS,
+          ZEDU_SETUP_RETRY_MS * 2 ** attempt
+        );
+        attempt += 1;
+        retryTimer = window.setTimeout(setUp, delay);
+      });
+    };
+    setUp();
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(retryTimer);
+      stop?.();
     };
   }
 

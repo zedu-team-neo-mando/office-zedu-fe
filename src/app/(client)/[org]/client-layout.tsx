@@ -34,6 +34,7 @@ import {
 } from "~/utils/org-switch";
 import { useOrganisationUsers } from "~/hooks/useOrganisationUsers";
 import { isReservedPathSegment } from "~/lib/reserved-paths";
+import { isDesktopEmbed } from "./_components/office/desktop-bridge";
 
 const ClientLayout = ({
   children,
@@ -288,7 +289,12 @@ const ClientLayout = ({
   const isRecorderSession =
     isRecorderRoute(pathname) || buzzSessionMode === RECORDER_SESSION_MODE;
 
-  const isStandaloneBuzzSession = isBuzzDetailsScreen;
+  // Zedu Desktop draws its own navigation around the office, so the embedded
+  // office gets the same bare layout as a standalone call.
+  const isDesktopOffice =
+    pathname.split("/")[2] === "office" && isDesktopEmbed();
+
+  const isStandaloneBuzzSession = isBuzzDetailsScreen || isDesktopOffice;
 
   const channelBuzzOptions =
     buzzSessionMode === RECORDER_SESSION_MODE

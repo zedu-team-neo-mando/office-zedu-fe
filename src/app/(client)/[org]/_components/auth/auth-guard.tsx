@@ -15,6 +15,7 @@ import {
   isUnauthorizedResponse,
 } from "~/utils/auth-session";
 import { isReservedPathSegment } from "~/lib/reserved-paths";
+import { isDesktopEmbed } from "../office/desktop-bridge";
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -65,7 +66,10 @@ const AuthGuard = ({ children }: AuthGuardProps) => {
 
       // Construct redirect URL once
       const currentFullUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
-      const loginUrl = `/auth/login?redirect=${encodeURIComponent(currentFullUrl)}`;
+      // Zedu Desktop signs in again through its own zedu session.
+      const loginUrl = isDesktopEmbed()
+        ? "/auth/desktop"
+        : `/auth/login?redirect=${encodeURIComponent(currentFullUrl)}`;
 
       // 1. Immediate local check
       if (!orgId || !token) {
