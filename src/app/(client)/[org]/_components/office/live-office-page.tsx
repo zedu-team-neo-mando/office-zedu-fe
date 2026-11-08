@@ -2,14 +2,17 @@
 
 import { useContext, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Loader2, Power, RefreshCw } from "lucide-react";
 import { DataContext } from "~/store/GlobalState";
 import OfficeDemo from "~/app/office/_components/OfficeDemo";
 import { LiveOfficeSource, OfficeDisabledError } from "./live-office-source";
-import { exitToDesktop } from "./desktop-bridge";
+import { exitToDesktop, isDesktopEmbed } from "./desktop-bridge";
 import { cn } from "~/lib/utils";
 import { useOfficeStatus } from "~/hooks/use-office-status";
-import { showInfo } from "~/components/toast/sonner";
+import { showError, showInfo, showSuccess } from "~/components/toast/sonner";
+import { RequirePermission } from "~/components/rbac/RequirePermission";
+import { PutRequest } from "~/utils/new-request";
+import { clearOfficeStatusCache } from "~/lib/office/status";
 
 /**
  * The live office. Rooms come from the organisation's real channels, direct
@@ -32,14 +35,6 @@ export default function LiveOfficePage() {
   const source = useMemo(() => new LiveOfficeSource(), []);
   const [ready, setReady] = useState(false);
 
-  // A deep link to an office the organisation has switched off goes home
-  // instead of loading a building it cannot use.
-  useEffect(() => {
-    if (officeEnabled === false && orgSlug) {
-      router.replace(`/${orgSlug}`);
-    }
-  }, [officeEnabled, orgSlug, router]);
-
   useEffect(() => {
     if (!orgId || !userId || officeEnabled !== true) return;
 
@@ -56,9 +51,11 @@ export default function LiveOfficePage() {
         if (cancelled) return;
 
         // An administrator switched the office off while the user was in it.
+        // Re-reading the setting shows the switched-off card, with its way
+        // back, instead of dropping them somewhere else.
         if (cause instanceof OfficeDisabledError) {
           showInfo("The office was switched off for your organisation.");
-          router.replace(`/${orgSlug}`);
+          clearOfficeStatusCache();
           return;
         }
 
@@ -87,7 +84,8 @@ export default function LiveOfficePage() {
     return (
       <StatusCard
         title="The office is switched off"
-        body="This organisation has not switched The Office on. Asking an administrator to enable it in the organisation settings will bring the building back."
+        body="This organisation has not switched The Office on. An owner or administrator can turn it on for everyone."
+        action={<OfficeOffActions orgSlug={orgSlug} />}
       />
     );
   }
@@ -154,6 +152,73 @@ export default function LiveOfficePage() {
         router.push(`/${orgSlug}`);
       }}
     />
+  );
+}
+
+/**
+ * What someone can do in an organisation whose office is off: go back, and,
+ * for owners and administrators, switch it on without leaving for the
+ * settings. The switch is shown on the same permission as the settings page.
+ */
+function OfficeOffActions({ orgSlug }: { orgSlug: string }) {
+  const router = useRouter();
+  const [saving, setSaving] = useState(false);
+  // Read after mounting: the server render cannot see the desktop app.
+  const [embedded, setEmbedded] = useState(false);
+
+  useEffect(() => {
+    setEmbedded(isDesktopEmbed());
+  }, []);
+
+  async function goBack() {
+    // Inside Zedu Desktop this closes the office and returns to the app; in a
+    // browser it returns to the organisation's chat.
+    if (await exitToDesktop()) return;
+    router.push(`/${orgSlug}`);
+  }
+
+  async function turnOn() {
+    setSaving(true);
+    const response = await PutRequest("/office/settings", { enabled: true });
+    setSaving(false);
+
+    const status = response?.status ?? response?.response?.status;
+    if (typeof status !== "number" || status >= 400) {
+      showError("The office could not be switched on.");
+      return;
+    }
+
+    showSuccess("The office is on for your organisation.");
+    // The page and the rail both read the cached setting; this reloads it and
+    // opens the building.
+    clearOfficeStatusCache();
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-3">
+      <button
+        type="button"
+        onClick={goBack}
+        className="rounded-xl border border-white/15 px-4 py-2.5 text-[0.78rem] font-extrabold text-[#d6dcf0] transition-colors hover:bg-white/10"
+      >
+        {embedded ? "Back to Zedu" : "Back to chat"}
+      </button>
+      <RequirePermission permission="manage:organization">
+        <button
+          type="button"
+          onClick={turnOn}
+          disabled={saving}
+          className="flex items-center gap-2 rounded-xl bg-[#8b5cf6] px-4 py-2.5 text-[0.78rem] font-extrabold text-white transition-colors hover:bg-[#7c4df0] disabled:opacity-60"
+        >
+          {saving ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Power className="h-4 w-4" />
+          )}
+          Turn the office on
+        </button>
+      </RequirePermission>
+    </div>
   );
 }
 
