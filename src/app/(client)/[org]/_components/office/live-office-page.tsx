@@ -179,8 +179,16 @@ function OfficeOffActions({ orgSlug }: { orgSlug: string }) {
 
   async function turnOn() {
     setSaving(true);
-    const response = await PutRequest("/office/settings", { enabled: true });
-    setSaving(false);
+    let response: any;
+    try {
+      response = await PutRequest("/office/settings", { enabled: true });
+    } catch {
+      // The request can throw before it is sent, e.g. when storage is blocked;
+      // the button must come back with an error rather than stay disabled.
+      response = null;
+    } finally {
+      setSaving(false);
+    }
 
     const status = response?.status ?? response?.response?.status;
     if (typeof status !== "number" || status >= 400) {
